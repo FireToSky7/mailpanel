@@ -53,6 +53,64 @@ def delete_panel_user(user_id: int) -> None:
         execute(conn, "DELETE FROM panel_users WHERE id = %s", (user_id,))
 
 
+STORAGE_BASE_DIRECTORY = "/var/vmail/vmail1"
+CREATE_MAIL_USER_SCRIPT_CANDIDATES: tuple[str, ...] = (
+    "/opt/www/iredadmin/tools/create_mail_user_SQL.sh",
+    "/var/www/iredadmin/tools/create_mail_user_SQL.sh",
+    "/usr/share/apache2/iredadmin/tools/create_mail_user_SQL.sh",
+)
+
+
+def _find_create_mail_user_script() -> Path | None:
+    for path_str in CREATE_MAIL_USER_SCRIPT_CANDIDATES:
+        path = Path(path_str)
+        if path.is_file():
+            return path
+    for path in Path("/root").glob("iRedMail*/tools/create_mail_user_SQL.sh"):
+        if path.is_file():
+            return path
+    return None
+
+
+def _storage_paths() -> tuple[str, str]:
+    base_dir = Path(STORAGE_BASE_DIRECTORY)
+    return str(base_dir.parent), base_dir.name
+
+
+def _iredmail_maildir(local: str, domain: str) -> str:
+    """Same layout as iRedMail tools/create_mail_user_SQL.sh (hashed style)."""
+    date = datetime.now().strftime("%Y.%m.%d.%H.%M.%S")
+    str1 = local[0]
+    str2 = local[1] if len(local) > 1 else str1
+    str3 = local[2] if len(local) > 2 else str2
+    return f"{domain}/{str1}/{str2}/{str3}/{local}-{date}/"
+
+
+def _run_generated_mail_user_sql(sql: str) -> None:
+    statements = [part.strip() for part in sql.split(";") if part.strip()]
+    with vmail_conn() as conn:
+        for statement in statements:
+            execute(conn, statement)
+
+
+def _create_mailbox_via_script(script: Path, username: str, password: str, name: str, quota: int) -> None:
+    result = subprocess.run(
+        ["bash", str(script), username.lower(), password],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "create_mail_user_SQL.sh failed")
+    _run_generated_mail_user_sql(result.stdout)
+    with vmail_conn() as conn:
+        execute(
+            conn,
+            "UPDATE mailbox SET name = %s, quota = %s, passwordlastchange = NOW() WHERE username = %s",
+            (name, quota, username.lower()),
+        )
+
+
 def list_mailboxes(domain: str | None = None) -> list[dict[str, Any]]:
     query = (
         "SELECT username, name, domain, quota, active, created, modified FROM mailbox"
@@ -67,21 +125,38 @@ def list_mailboxes(domain: str | None = None) -> list[dict[str, Any]]:
 
 
 def create_mailbox(username: str, password: str, name: str, quota: int = 1024) -> None:
-    local, domain = username.lower().split("@", 1)
-    maildir = f"{domain}/{local[-1]}/{local[-2:]}/{local}/"
+    email = username.lower()
+    script = _find_create_mail_user_script()
+    if script:
+        _create_mailbox_via_script(script, email, password, name, quota)
+        return
+
+    local, domain = email.split("@", 1)
+    maildir = _iredmail_maildir(local, domain)
     hashed = hash_mailbox_password(password)
+    storage_base, storage_node = _storage_paths()
     with vmail_conn() as conn:
         execute(
             conn,
-            "INSERT INTO mailbox (username, password, name, maildir, quota, domain, active) "
-            "VALUES (%s, %s, %s, %s, %s, %s, 1)",
-            (username.lower(), hashed, name, maildir, quota, domain),
+            "INSERT INTO mailbox ("
+            "username, password, name, storagebasedirectory, storagenode, maildir, "
+            "quota, domain, mailboxformat, mailboxfolder, active, passwordlastchange, created"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'maildir', 'Maildir', 1, NOW(), NOW())",
+            (email, hashed, name, storage_base, storage_node, maildir, quota, domain),
+        )
+        execute(
+            conn,
+            "INSERT INTO forwardings (address, forwarding, domain, dest_domain, is_forwarding, active) "
+            "VALUES (%s, %s, %s, %s, 1, 1)",
+            (email, email, domain, domain),
         )
 
 
 def delete_mailbox(username: str) -> None:
+    email = username.lower()
     with vmail_conn() as conn:
-        execute(conn, "DELETE FROM mailbox WHERE username = %s", (username.lower(),))
+        execute(conn, "DELETE FROM forwardings WHERE address = %s", (email,))
+        execute(conn, "DELETE FROM mailbox WHERE username = %s", (email,))
 
 
 def update_mailbox_password(username: str, password: str) -> None:

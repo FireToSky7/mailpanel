@@ -76,9 +76,9 @@ def greylisting_whitelist_domain(domain: str) -> None:
     _run_script(get_config().paths.greylisting_script, ["--whitelist-domain", "--from", domain])
 
 
-def hash_mailbox_password(password: str) -> str:
+def hash_mailbox_password(password: str, scheme: str = "SSHA512") -> str:
     result = subprocess.run(
-        ["doveadm", "pw", "-s", "BLF-CRYPT", "-p", password],
+        ["doveadm", "pw", "-s", scheme, "-p", password],
         capture_output=True,
         text=True,
         check=True,
