@@ -8,6 +8,94 @@ export type UserInfo = {
   mailbox?: string | null
 }
 
+export type Mailbox = {
+  username: string
+  name: string
+  domain: string
+  quota: number
+  active: number
+}
+
+export type Alias = {
+  address: string
+  goto: string
+  domain: string
+  active: number
+}
+
+export type ServiceStatus = {
+  name: string
+  status: string
+}
+
+export type Fail2banJail = {
+  jail: string
+  banned_ips: string[]
+}
+
+export type PanelUser = {
+  id: number
+  username: string
+  role: string
+  mailbox: string | null
+  display_name: string
+  active: number
+}
+
+export type SpamConfig = {
+  raw: string
+  required_score: string
+}
+
+export type AuditEntry = {
+  id: number
+  username: string
+  action: string
+  resource: string
+  details: string
+  ip_address: string
+  created_at: string
+}
+
+export type LogEntry = {
+  id: number
+  logged_at: string
+  service: string
+  level: string
+  queue_id: string | null
+  mail_from: string | null
+  mail_to: string | null
+  status: string | null
+  spam_score: number | null
+  message: string
+}
+
+export type LogsSearchResult = {
+  total: number
+  items: LogEntry[]
+}
+
+export type DashboardData = {
+  stats: {
+    domain: string
+    mailboxes: number
+    aliases: number
+    quarantine: number
+    audit_today: number
+  }
+  services: ServiceStatus[]
+}
+
+export type ForwardingInfo = {
+  address: string
+  goto: string | null
+}
+
+export type GreylistingData = {
+  settings: string
+  whitelist_domains: string
+}
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
 }
@@ -53,43 +141,48 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   me: () => request<UserInfo>('/api/auth/me'),
-  dashboard: () => request('/api/dashboard'),
-  mailboxes: () => request('/api/mailboxes'),
-  createMailbox: (body: object) => request('/api/mailboxes', { method: 'POST', body: JSON.stringify(body) }),
-  deleteMailbox: (username: string) => request(`/api/mailboxes/${encodeURIComponent(username)}`, { method: 'DELETE' }),
+  dashboard: () => request<DashboardData>('/api/dashboard'),
+  mailboxes: () => request<Mailbox[]>('/api/mailboxes'),
+  createMailbox: (body: object) => request<{ ok: boolean }>('/api/mailboxes', { method: 'POST', body: JSON.stringify(body) }),
+  deleteMailbox: (username: string) =>
+    request<{ ok: boolean }>(`/api/mailboxes/${encodeURIComponent(username)}`, { method: 'DELETE' }),
   mailboxPassword: (username: string, password: string) =>
-    request(`/api/mailboxes/${encodeURIComponent(username)}/password`, {
+    request<{ ok: boolean }>(`/api/mailboxes/${encodeURIComponent(username)}/password`, {
       method: 'PUT',
       body: JSON.stringify({ password }),
     }),
-  aliases: () => request('/api/aliases'),
-  createAlias: (body: object) => request('/api/aliases', { method: 'POST', body: JSON.stringify(body) }),
-  deleteAlias: (address: string) => request(`/api/aliases/${encodeURIComponent(address)}`, { method: 'DELETE' }),
+  aliases: () => request<Alias[]>('/api/aliases'),
+  createAlias: (body: object) => request<{ ok: boolean }>('/api/aliases', { method: 'POST', body: JSON.stringify(body) }),
+  deleteAlias: (address: string) =>
+    request<{ ok: boolean }>(`/api/aliases/${encodeURIComponent(address)}`, { method: 'DELETE' }),
   wblist: (type: string, account?: string) =>
     request<{ entries: string[] }>(`/api/wblist/${type}${account ? `?account=${encodeURIComponent(account)}` : ''}`),
   addWblist: (type: string, entries: string[], account?: string) =>
-    request(`/api/wblist/${type}`, { method: 'POST', body: JSON.stringify({ entries, account }) }),
+    request<{ ok: boolean }>(`/api/wblist/${type}`, { method: 'POST', body: JSON.stringify({ entries, account }) }),
   deleteWblist: (type: string, entries: string[], account?: string) =>
-    request(`/api/wblist/${type}`, { method: 'DELETE', body: JSON.stringify({ entries, account }) }),
-  spam: () => request('/api/spam'),
-  updateSpam: (body: object) => request('/api/spam', { method: 'PUT', body: JSON.stringify(body) }),
-  greylisting: () => request('/api/greylisting'),
-  logsSearch: (params: URLSearchParams) => request(`/api/logs/search?${params}`),
-  logsTrace: (queueId: string) => request(`/api/logs/trace/${queueId}`),
-  logsLive: (type: string) => request(`/api/logs/live/${type}`),
-  services: () => request('/api/services'),
-  restartService: (name: string) => request(`/api/services/${name}/restart`, { method: 'POST' }),
-  fail2ban: () => request('/api/fail2ban'),
-  unban: (jail: string, ip: string) => request('/api/fail2ban/unban', { method: 'POST', body: JSON.stringify({ jail, ip }) }),
-  panelUsers: () => request('/api/panel-users'),
-  createPanelUser: (body: object) => request('/api/panel-users', { method: 'POST', body: JSON.stringify(body) }),
+    request<{ ok: boolean }>(`/api/wblist/${type}`, { method: 'DELETE', body: JSON.stringify({ entries, account }) }),
+  spam: () => request<SpamConfig>('/api/spam'),
+  updateSpam: (body: object) => request<{ ok: boolean }>('/api/spam', { method: 'PUT', body: JSON.stringify(body) }),
+  greylisting: () => request<GreylistingData>('/api/greylisting'),
+  logsSearch: (params: URLSearchParams) => request<LogsSearchResult>(`/api/logs/search?${params}`),
+  logsTrace: (queueId: string) => request<LogEntry[]>(`/api/logs/trace/${queueId}`),
+  logsLive: (type: string) => request<{ lines: string[] }>(`/api/logs/live/${type}`),
+  services: () => request<ServiceStatus[]>('/api/services'),
+  restartService: (name: string) => request<ServiceStatus>(`/api/services/${name}/restart`, { method: 'POST' }),
+  fail2ban: () => request<Fail2banJail[]>('/api/fail2ban'),
+  unban: (jail: string, ip: string) =>
+    request<{ ok: boolean }>('/api/fail2ban/unban', { method: 'POST', body: JSON.stringify({ jail, ip }) }),
+  panelUsers: () => request<PanelUser[]>('/api/panel-users'),
+  createPanelUser: (body: object) =>
+    request<{ ok: boolean }>('/api/panel-users', { method: 'POST', body: JSON.stringify(body) }),
   panelUserPassword: (id: number, password: string) =>
-    request(`/api/panel-users/${id}/password`, { method: 'PUT', body: JSON.stringify({ password }) }),
-  deletePanelUser: (id: number) => request(`/api/panel-users/${id}`, { method: 'DELETE' }),
-  audit: () => request('/api/audit'),
-  myForwarding: () => request('/api/portal/forwarding'),
-  setForwarding: (goto: string) => request('/api/portal/forwarding', { method: 'PUT', body: JSON.stringify({ goto }) }),
-  clearForwarding: () => request('/api/portal/forwarding', { method: 'DELETE' }),
+    request<{ ok: boolean }>(`/api/panel-users/${id}/password`, { method: 'PUT', body: JSON.stringify({ password }) }),
+  deletePanelUser: (id: number) => request<{ ok: boolean }>(`/api/panel-users/${id}`, { method: 'DELETE' }),
+  audit: () => request<AuditEntry[]>('/api/audit'),
+  myForwarding: () => request<ForwardingInfo>('/api/portal/forwarding'),
+  setForwarding: (goto: string) =>
+    request<{ ok: boolean }>('/api/portal/forwarding', { method: 'PUT', body: JSON.stringify({ goto }) }),
+  clearForwarding: () => request<{ ok: boolean }>('/api/portal/forwarding', { method: 'DELETE' }),
 }
 
 export function canAccess(role: string, section: string): boolean {
