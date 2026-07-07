@@ -1,0 +1,38 @@
+import { useEffect, useState } from 'react'
+import { api } from '../api'
+
+export default function DashboardPage() {
+  const [data, setData] = useState<any>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    api.dashboard().then(setData).catch((e) => setError(e.message))
+  }, [])
+
+  if (error) return <div className="error">{error}</div>
+  if (!data) return <div>Загрузка...</div>
+
+  const stats = data.stats
+  return (
+    <div>
+      <div className="topbar"><h2>Обзор</h2></div>
+      <div className="grid">
+        <div className="stat"><div className="label">Домен</div><div className="value" style={{ fontSize: '1.1rem' }}>{stats.domain}</div></div>
+        <div className="stat"><div className="label">Ящики</div><div className="value">{stats.mailboxes}</div></div>
+        <div className="stat"><div className="label">Алиасы</div><div className="value">{stats.aliases}</div></div>
+        <div className="stat"><div className="label">Карантин</div><div className="value">{stats.quarantine}</div></div>
+      </div>
+      <div className="card" style={{ marginTop: 20 }}>
+        <h3>Службы</h3>
+        <table>
+          <thead><tr><th>Служба</th><th>Статус</th></tr></thead>
+          <tbody>
+            {data.services.map((s: any) => (
+              <tr key={s.name}><td>{s.name}</td><td><span className={`badge ${s.status === 'active' ? '' : 'down'}`}>{s.status}</span></td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}

@@ -1,0 +1,51 @@
+panel:
+  host: "127.0.0.1"
+  port: 8080
+  secret_key: "CHANGE-ME-generate-random-64-chars"
+  token_expire_hours: 12
+  mail_domain: "company.ru"
+
+database:
+  host: "127.0.0.1"
+  port: 3306
+  user: "root"
+  password: "MYSQL_ROOT_PASSWORD"
+  database: "mailpanel"
+
+vmail_database:
+  host: "127.0.0.1"
+  port: 3306
+  user: "vmail"
+  password: "VMMAIL_PASSWORD"
+  database: "vmail"
+
+amavisd_database:
+  host: "127.0.0.1"
+  port: 3306
+  user: "amavisd"
+  password: "AMAVISD_PASSWORD"
+  database: "amavisd"
+
+paths:
+  wblist_script: "/opt/iredapd/tools/wblist_admin.py"
+  greylisting_script: "/opt/iredapd/tools/greylisting_admin.py"
+  spamassassin_config: "/etc/mail/spamassassin/local.cf"
+  maillog: "/var/log/maillog"
+  iredapd_log: "/var/log/iredapd/iredapd.log"
+  dovecot_log: "/var/log/dovecot/dovecot.log"
+  messages_log: "/var/log/messages"
+
+services:
+  - postfix
+  - dovecot
+  - amavisd
+  - nginx
+  - mariadb
+  - iredapd
+  - fail2ban
+  - clamd@amavisd
+
+log_collector:
+  enabled: true
+  poll_interval_seconds: 5
+  retention_days: 90
