@@ -37,6 +37,14 @@ class MailboxPassword(BaseModel):
         return validate_mailbox_password(value)
 
 
+class MailboxQuota(BaseModel):
+    quota: int = Field(ge=0)
+
+
+class MailboxActive(BaseModel):
+    active: bool
+
+
 class AliasCreate(BaseModel):
     address: str
     goto: str
@@ -115,14 +123,16 @@ def get_mailboxes():
 
 @router.post("/mailboxes", dependencies=[Depends(require_permission("mail.write"))])
 def post_mailbox(payload: MailboxCreate, request: Request, user: PanelUser = Depends(require_permission("mail.write"))):
-    domain = get_config().panel.mail_domain
+    domain = get_config().panel.mail_domain.lower()
     if not payload.username.endswith(f"@{domain}"):
-        raise HTTPException(400, f"Mailbox must be @{domain}")
+        raise HTTPException(400, f"Ящик должен быть в домене @{domain}")
     try:
         mail_ops.create_mailbox(payload.username, payload.password, payload.name, payload.quota)
         _audit(user, request, "create", "mailbox", payload.username)
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, f"Не удалось создать ящик: {exc}") from exc
     return {"ok": True}
 
 
@@ -139,6 +149,27 @@ def mailbox_password(username: str, payload: MailboxPassword, request: Request, 
         mail_ops.update_mailbox_password(username, payload.password)
         _audit(user, request, "password_change", "mailbox", username)
     except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True}
+
+
+@router.put("/mailboxes/{username:path}/quota", dependencies=[Depends(require_permission("mail.write"))])
+def mailbox_quota(username: str, payload: MailboxQuota, request: Request, user: PanelUser = Depends(require_permission("mail.write"))):
+    try:
+        mail_ops.update_mailbox_quota(username, payload.quota)
+        _audit(user, request, "quota_change", "mailbox", f"{username}={payload.quota}MB")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True}
+
+
+@router.put("/mailboxes/{username:path}/active", dependencies=[Depends(require_permission("mail.write"))])
+def mailbox_active(username: str, payload: MailboxActive, request: Request, user: PanelUser = Depends(require_permission("mail.write"))):
+    try:
+        mail_ops.update_mailbox_active(username, payload.active)
+        action = "enable" if payload.active else "disable"
+        _audit(user, request, action, "mailbox", username)
+    except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True}
 

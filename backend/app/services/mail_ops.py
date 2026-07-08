@@ -111,6 +111,12 @@ def _create_mailbox_via_script(script: Path, username: str, password: str, name:
         )
 
 
+def mailbox_exists(username: str) -> bool:
+    email = username.lower()
+    with vmail_conn() as conn:
+        return fetch_one(conn, "SELECT username FROM mailbox WHERE username = %s", (email,)) is not None
+
+
 def list_mailboxes(domain: str | None = None) -> list[dict[str, Any]]:
     query = (
         "SELECT username, name, domain, quota, active, created, modified FROM mailbox"
@@ -126,6 +132,11 @@ def list_mailboxes(domain: str | None = None) -> list[dict[str, Any]]:
 
 def create_mailbox(username: str, password: str, name: str, quota: int = 1024) -> None:
     email = username.lower()
+    if mailbox_exists(email):
+        raise ValueError(f"Ящик уже существует: {email}")
+    if fetch_alias_address(email):
+        raise ValueError(f"Этот адрес уже занят алиасом: {email}")
+
     script = _find_create_mail_user_script()
     if script:
         _create_mailbox_via_script(script, email, password, name, quota)
@@ -150,6 +161,31 @@ def create_mailbox(username: str, password: str, name: str, quota: int = 1024) -
             "VALUES (%s, %s, %s, %s, 1, 1)",
             (email, email, domain, domain),
         )
+
+
+def update_mailbox_quota(username: str, quota: int) -> None:
+    email = username.lower()
+    if quota < 0:
+        raise ValueError("Квота не может быть отрицательной")
+    with vmail_conn() as conn:
+        if not fetch_one(conn, "SELECT username FROM mailbox WHERE username = %s", (email,)):
+            raise ValueError(f"Ящик не найден: {email}")
+        execute(conn, "UPDATE mailbox SET quota = %s WHERE username = %s", (quota, email))
+
+
+def update_mailbox_active(username: str, active: bool) -> None:
+    email = username.lower()
+    flag = 1 if active else 0
+    with vmail_conn() as conn:
+        if not fetch_one(conn, "SELECT username FROM mailbox WHERE username = %s", (email,)):
+            raise ValueError(f"Ящик не найден: {email}")
+        execute(conn, "UPDATE mailbox SET active = %s WHERE username = %s", (flag, email))
+        execute(conn, "UPDATE forwardings SET active = %s WHERE address = %s", (flag, email))
+
+
+def fetch_alias_address(address: str) -> bool:
+    with vmail_conn() as conn:
+        return fetch_one(conn, "SELECT address FROM alias WHERE address = %s", (address.lower(),)) is not None
 
 
 def delete_mailbox(username: str) -> None:
@@ -194,6 +230,8 @@ def create_alias(address: str, goto: str) -> None:
     with vmail_conn() as conn:
         if fetch_one(conn, "SELECT address FROM alias WHERE address = %s", (address,)):
             raise ValueError(f"Алиас уже существует: {address}")
+        if mailbox_exists(address):
+            raise ValueError(f"Этот адрес уже занят ящиком: {address}")
         if not fetch_one(conn, "SELECT username FROM mailbox WHERE username = %s AND active = 1", (goto,)):
             raise ValueError(f"Ящик назначения не найден или неактивен: {goto}")
         execute(conn, "INSERT INTO alias (address, domain, active) VALUES (%s, %s, 1)", (address, domain))

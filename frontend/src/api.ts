@@ -153,6 +153,16 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ password }),
     }),
+  mailboxQuota: (username: string, quota: number) =>
+    request<{ ok: boolean }>(`/api/mailboxes/${encodeURIComponent(username)}/quota`, {
+      method: 'PUT',
+      body: JSON.stringify({ quota }),
+    }),
+  mailboxActive: (username: string, active: boolean) =>
+    request<{ ok: boolean }>(`/api/mailboxes/${encodeURIComponent(username)}/active`, {
+      method: 'PUT',
+      body: JSON.stringify({ active }),
+    }),
   aliases: () => request<Alias[]>('/api/aliases'),
   createAlias: (body: object) => request<{ ok: boolean }>('/api/aliases', { method: 'POST', body: JSON.stringify(body) }),
   deleteAlias: (address: string) =>
