@@ -165,55 +165,93 @@ def update_mailbox_password(username: str, password: str) -> None:
         execute(conn, "UPDATE mailbox SET password = %s WHERE username = %s", (hashed, username.lower()))
 
 
+def _dest_domain(email: str) -> str:
+    return email.lower().split("@", 1)[1]
+
+
 def list_aliases(domain: str | None = None) -> list[dict[str, Any]]:
-    query = "SELECT address, goto, domain, active FROM alias"
+    query = (
+        "SELECT a.address, "
+        "GROUP_CONCAT(f.forwarding ORDER BY f.forwarding SEPARATOR ', ') AS goto, "
+        "a.domain, a.active "
+        "FROM alias a "
+        "LEFT JOIN forwardings f ON f.address = a.address AND f.is_list = 1 "
+    )
     params: tuple[Any, ...] = ()
     if domain:
-        query += " WHERE domain = %s"
+        query += " WHERE a.domain = %s"
         params = (domain.lower(),)
-    query += " ORDER BY address"
+    query += " GROUP BY a.address, a.domain, a.active ORDER BY a.address"
     with vmail_conn() as conn:
         return fetch_all(conn, query, params)
 
 
 def create_alias(address: str, goto: str) -> None:
-    domain = address.split("@", 1)[1].lower()
+    address = address.lower()
+    goto = goto.lower()
+    domain = _dest_domain(address)
+    dest_domain = _dest_domain(goto)
     with vmail_conn() as conn:
+        if fetch_one(conn, "SELECT address FROM alias WHERE address = %s", (address,)):
+            raise ValueError(f"Alias already exists: {address}")
+        execute(conn, "INSERT INTO alias (address, domain, active) VALUES (%s, %s, 1)", (address, domain))
         execute(
             conn,
-            "INSERT INTO alias (address, goto, domain, active) VALUES (%s, %s, %s, 1)",
-            (address.lower(), goto.lower(), domain),
+            "INSERT INTO forwardings (address, forwarding, domain, dest_domain, is_list, active) "
+            "VALUES (%s, %s, %s, %s, 1, 1)",
+            (address, goto, domain, dest_domain),
         )
 
 
 def delete_alias(address: str) -> None:
+    address = address.lower()
     with vmail_conn() as conn:
-        execute(conn, "DELETE FROM alias WHERE address = %s", (address.lower(),))
+        execute(conn, "DELETE FROM forwardings WHERE address = %s", (address,))
+        execute(conn, "DELETE FROM alias WHERE address = %s", (address,))
 
 
 def get_forwarding(username: str) -> str | None:
+    username = username.lower()
     with vmail_conn() as conn:
-        row = fetch_one(conn, "SELECT goto FROM alias WHERE address = %s", (username.lower(),))
-    return row["goto"] if row else None
+        rows = fetch_all(
+            conn,
+            "SELECT forwarding FROM forwardings "
+            "WHERE address = %s AND is_forwarding = 1 AND forwarding != %s "
+            "ORDER BY forwarding",
+            (username, username),
+        )
+    if not rows:
+        return None
+    return ", ".join(row["forwarding"] for row in rows)
 
 
 def set_forwarding(username: str, goto: str) -> None:
+    username = username.lower()
+    goto = goto.lower()
+    domain = _dest_domain(username)
+    dest_domain = _dest_domain(goto)
     with vmail_conn() as conn:
-        existing = fetch_one(conn, "SELECT address FROM alias WHERE address = %s", (username.lower(),))
-        if existing:
-            execute(conn, "UPDATE alias SET goto = %s WHERE address = %s", (goto.lower(), username.lower()))
-        else:
-            domain = username.split("@", 1)[1].lower()
-            execute(
-                conn,
-                "INSERT INTO alias (address, goto, domain, active) VALUES (%s, %s, %s, 1)",
-                (username.lower(), goto.lower(), domain),
-            )
+        execute(
+            conn,
+            "DELETE FROM forwardings WHERE address = %s AND is_forwarding = 1 AND forwarding != %s",
+            (username, username),
+        )
+        execute(
+            conn,
+            "INSERT INTO forwardings (address, forwarding, domain, dest_domain, is_forwarding, active) "
+            "VALUES (%s, %s, %s, %s, 1, 1)",
+            (username, goto, domain, dest_domain),
+        )
 
 
 def clear_forwarding(username: str) -> None:
+    username = username.lower()
     with vmail_conn() as conn:
-        execute(conn, "DELETE FROM alias WHERE address = %s", (username.lower(),))
+        execute(
+            conn,
+            "DELETE FROM forwardings WHERE address = %s AND is_forwarding = 1 AND forwarding != %s",
+            (username, username),
+        )
 
 
 def dashboard_stats() -> dict[str, Any]:
