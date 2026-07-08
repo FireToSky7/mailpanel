@@ -1,29 +1,55 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.auth import PanelUser, Role, client_ip, get_current_user, require_permission, write_audit
 from app.config import get_config, role_has_permission
 from app.services import iredapd, mail_ops
+from app.validators import normalize_email, validate_mailbox_password
 
 router = APIRouter(prefix="/api", tags=["api"])
 
 
 class MailboxCreate(BaseModel):
     username: str
-    password: str = Field(min_length=6)
+    password: str
     name: str = ""
     quota: int = Field(default=1024, ge=0)
 
+    @field_validator("username")
+    @classmethod
+    def check_username(cls, value: str) -> str:
+        return normalize_email(value, "Ящик")
+
+    @field_validator("password")
+    @classmethod
+    def check_password(cls, value: str) -> str:
+        return validate_mailbox_password(value)
+
 
 class MailboxPassword(BaseModel):
-    password: str = Field(min_length=6)
+    password: str
+
+    @field_validator("password")
+    @classmethod
+    def check_password(cls, value: str) -> str:
+        return validate_mailbox_password(value)
 
 
 class AliasCreate(BaseModel):
     address: str
     goto: str
+
+    @field_validator("address")
+    @classmethod
+    def check_address(cls, value: str) -> str:
+        return normalize_email(value, "Адрес алиаса")
+
+    @field_validator("goto")
+    @classmethod
+    def check_goto(cls, value: str) -> str:
+        return normalize_email(value, "Пересылка на")
 
 
 class ForwardingUpdate(BaseModel):
@@ -124,11 +150,16 @@ def get_aliases():
 
 @router.post("/aliases", dependencies=[Depends(require_permission("mail.write"))])
 def post_alias(payload: AliasCreate, request: Request, user: PanelUser = Depends(require_permission("mail.write"))):
+    domain = get_config().panel.mail_domain.lower()
+    if not payload.address.endswith(f"@{domain}"):
+        raise HTTPException(400, f"Алиас должен быть в домене @{domain}")
     try:
         mail_ops.create_alias(payload.address, payload.goto)
         _audit(user, request, "create", "alias", payload.address)
-    except Exception as exc:
+    except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, f"Не удалось создать алиас: {exc}") from exc
     return {"ok": True}
 
 

@@ -193,7 +193,9 @@ def create_alias(address: str, goto: str) -> None:
     dest_domain = _dest_domain(goto)
     with vmail_conn() as conn:
         if fetch_one(conn, "SELECT address FROM alias WHERE address = %s", (address,)):
-            raise ValueError(f"Alias already exists: {address}")
+            raise ValueError(f"Алиас уже существует: {address}")
+        if not fetch_one(conn, "SELECT username FROM mailbox WHERE username = %s AND active = 1", (goto,)):
+            raise ValueError(f"Ящик назначения не найден или неактивен: {goto}")
         execute(conn, "INSERT INTO alias (address, domain, active) VALUES (%s, %s, 1)", (address, domain))
         execute(
             conn,

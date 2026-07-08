@@ -61,6 +61,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .login-card { width: 380px; }
 .error { color: #fca5a5; margin-top: 10px; }
+.prewrap { white-space: pre-wrap; }
 .log-box {
   background: #0b0f14;
   border: 1px solid #243041;

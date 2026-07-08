@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, getUser } from '../api'
+import { errorMessage, validateEmail } from '../errors'
 
 export default function AliasesPage() {
   const [items, setItems] = useState<any[]>([])
@@ -14,18 +15,24 @@ export default function AliasesPage() {
   }
 
   useEffect(() => {
-    load().catch((e) => setError(e.message))
+    load().catch((e) => setError(errorMessage(e)))
   }, [])
 
   async function create() {
     setError('')
+    const addressError = validateEmail(address, 'Адрес алиаса')
+    const gotoError = validateEmail(goto, 'Пересылка на')
+    if (addressError || gotoError) {
+      setError([addressError, gotoError].filter(Boolean).join('\n'))
+      return
+    }
     try {
-      await api.createAlias({ address, goto })
+      await api.createAlias({ address: address.trim(), goto: goto.trim() })
       setAddress('')
       setGoto('')
       await load()
-    } catch (e: any) {
-      setError(e.message)
+    } catch (e) {
+      setError(errorMessage(e))
     }
   }
 
@@ -35,8 +42,8 @@ export default function AliasesPage() {
     try {
       await api.deleteAlias(addr)
       await load()
-    } catch (e: any) {
-      setError(e.message)
+    } catch (e) {
+      setError(errorMessage(e))
     }
   }
 
@@ -50,10 +57,11 @@ export default function AliasesPage() {
             <input placeholder="target@domain.ru" value={goto} onChange={(e) => setGoto(e.target.value)} />
             <button onClick={create}>Добавить</button>
           </div>
-          <p className="muted">Алиас — отдельный адрес без ящика; письма уходят на указанный ящик.</p>
+          {error && <p className="error prewrap">{error}</p>}
+          <p className="muted">Алиас — отдельный адрес без ящика; письма уходят на существующий ящик в вашем домене.</p>
         </div>
       )}
-      {error && <p className="error">{error}</p>}
+      {!canWrite && error && <p className="error prewrap">{error}</p>}
       <div className="card">
         <table>
           <thead><tr><th>Адрес</th><th>Пересылка на</th>{canWrite && <th></th>}</tr></thead>

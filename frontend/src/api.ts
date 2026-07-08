@@ -1,3 +1,5 @@
+import { formatApiError } from './errors'
+
 const TOKEN_KEY = 'mailpanel_token'
 const USER_KEY = 'mailpanel_user'
 
@@ -130,7 +132,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     throw new Error('Unauthorized')
   }
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.detail || data.message || 'Request failed')
+  if (!res.ok) throw new Error(formatApiError(data.detail) || data.message || 'Ошибка запроса')
   return data as T
 }
 
