@@ -16,6 +16,9 @@ export type Mailbox = {
   domain: string
   quota: number
   active: number
+  used_mb?: number
+  bytes_used?: number
+  messages?: number
 }
 
 export type Alias = {

@@ -119,15 +119,22 @@ def mailbox_exists(username: str) -> bool:
 
 def list_mailboxes(domain: str | None = None) -> list[dict[str, Any]]:
     query = (
-        "SELECT username, name, domain, quota, active, created, modified FROM mailbox"
+        "SELECT m.username, m.name, m.domain, m.quota, m.active, m.created, m.modified, "
+        "COALESCE(u.bytes, 0) AS bytes_used, COALESCE(u.messages, 0) AS messages "
+        "FROM mailbox m "
+        "LEFT JOIN used_quota u ON m.username = u.username"
     )
     params: tuple[Any, ...] = ()
     if domain:
-        query += " WHERE domain = %s"
+        query += " WHERE m.domain = %s"
         params = (domain.lower(),)
-    query += " ORDER BY username"
+    query += " ORDER BY m.username"
     with vmail_conn() as conn:
-        return fetch_all(conn, query, params)
+        rows = fetch_all(conn, query, params)
+    for row in rows:
+        bytes_used = int(row.get("bytes_used") or 0)
+        row["used_mb"] = round(bytes_used / (1024 * 1024), 1)
+    return rows
 
 
 def create_mailbox(username: str, password: str, name: str, quota: int = 1024) -> None:

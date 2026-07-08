@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.auth import PanelUser, Role, client_ip, get_current_user, require_permission, write_audit
 from app.config import get_config, role_has_permission
 from app.services import iredapd, mail_ops
+from app.services.iredapd import IredapdError
 from app.validators import normalize_email, validate_mailbox_password
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -233,7 +234,11 @@ def get_wblist(
         account = mail_ops.user_wblist_account(user)
     elif not role_has_permission(user.role, "antispam.read"):
         raise HTTPException(403)
-    return {"entries": iredapd.list_wblist(list_type, _wblist_account(user, account))}
+    try:
+        entries = iredapd.list_wblist(list_type, _wblist_account(user, account))
+    except IredapdError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"entries": entries}
 
 
 @router.post("/wblist/{list_type}")
@@ -253,12 +258,18 @@ def post_wblist(
         raise HTTPException(403)
     else:
         account = payload.account
+    if not payload.entries or not any(item.strip() for item in payload.entries):
+        raise HTTPException(400, "Укажите запись для добавления в список")
     try:
         validated = [iredapd.validate_wblist_entry(e) for e in payload.entries]
         iredapd.add_wblist(list_type, validated, account)
         _audit(user, request, "wblist_add", list_type, ", ".join(validated))
-    except Exception as exc:
+    except IredapdError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, f"Не удалось добавить в список: {exc}") from exc
     return {"ok": True}
 
 
@@ -288,10 +299,12 @@ def delete_wblist(
 
 @router.get("/greylisting", dependencies=[Depends(require_permission("antispam.read"))])
 def get_greylisting():
-    return {
-        "settings": iredapd.list_greylisting(),
-        "whitelist_domains": iredapd.list_greylisting_whitelist_domains(),
-    }
+    try:
+        settings = iredapd.list_greylisting()
+        whitelist_domains = iredapd.list_greylisting_whitelist_domains()
+    except IredapdError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"settings": settings, "whitelist_domains": whitelist_domains}
 
 
 @router.post("/greylisting/disable", dependencies=[Depends(require_permission("antispam.write"))])

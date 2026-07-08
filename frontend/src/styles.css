@@ -61,6 +61,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .login-card { width: 380px; }
 .error { color: #fca5a5; margin-top: 10px; }
+.info { color: #86efac; margin-top: 10px; }
 .prewrap { white-space: pre-wrap; }
 .inactive-row td { opacity: 0.65; }
 td.actions { white-space: nowrap; }

@@ -2,6 +2,12 @@ import { useEffect, useState } from 'react'
 import { api, getUser } from '../api'
 import { errorMessage, validateEmail, validateMailboxPassword } from '../errors'
 
+function formatQuota(usedMb: number | undefined, quotaMb: number): string {
+  const used = usedMb ?? 0
+  if (!quotaMb) return `${used} / без лимита`
+  return `${used} / ${quotaMb} MB`
+}
+
 export default function MailboxesPage() {
   const [items, setItems] = useState<any[]>([])
   const [username, setUsername] = useState('')
@@ -127,11 +133,11 @@ export default function MailboxesPage() {
       {!canWrite && error && <div className="error prewrap">{error}</div>}
       <div className="card">
         <table>
-          <thead><tr><th>Ящик</th><th>Имя</th><th>Квота</th><th>Активен</th>{canWrite && <th></th>}</tr></thead>
+          <thead><tr><th>Ящик</th><th>Имя</th><th>Занято / квота</th><th>Активен</th>{canWrite && <th></th>}</tr></thead>
           <tbody>
             {items.map((m) => (
               <tr key={m.username} className={m.active ? '' : 'inactive-row'}>
-                <td>{m.username}</td><td>{m.name}</td><td>{m.quota} MB</td><td>{m.active ? 'да' : 'нет'}</td>
+                <td>{m.username}</td><td>{m.name}</td><td>{formatQuota(m.used_mb, m.quota)}</td><td>{m.active ? 'да' : 'нет'}</td>
                 {canWrite && <td className="actions">
                   <button className="secondary" onClick={() => resetPassword(m.username)}>Пароль</button>
                   <button className="secondary" onClick={() => changeQuota(m.username, m.quota)}>Квота</button>
