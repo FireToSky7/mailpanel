@@ -1,11 +1,20 @@
 import { useEffect, useState } from 'react'
-import { api, getUser } from '../api'
+import { api, getUser, type GreylistingData } from '../api'
 import { errorMessage } from '../errors'
 
-function formatQuota(usedMb: number | undefined, quotaMb: number): string {
-  const used = usedMb ?? 0
-  if (!quotaMb) return `${used} / без лимита MB`
-  return `${used} / ${quotaMb} MB`
+function parseGreylistingTable(raw: string): { headers: string[]; rows: string[][] } | null {
+  const lines = raw.trim().split('\n').filter((line) => line.trim())
+  if (lines.length < 2) return null
+  const headers = lines[0].split('\t').map((cell) => cell.trim()).filter(Boolean)
+  const rows = lines.slice(1).map((line) => line.split('\t').map((cell) => cell.trim()))
+  return { headers, rows }
+}
+
+function parseGreylistingDomains(raw: string): string[] {
+  return raw
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
 }
 
 export default function AntispamPage() {
@@ -15,7 +24,7 @@ export default function AntispamPage() {
   const [blacklistEntry, setBlacklistEntry] = useState('')
   const [account, setAccount] = useState('')
   const [score, setScore] = useState('5.0')
-  const [grey, setGrey] = useState<any>(null)
+  const [grey, setGrey] = useState<GreylistingData | null>(null)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const role = getUser()?.role
@@ -146,12 +155,67 @@ export default function AntispamPage() {
       {canWrite && (
         <div className="card">
           <h3>Чёрный список</h3>
+          <p className="muted">
+            Блокирует <strong>входящие</strong> письма от указанных отправителей (email, домен или IP).
+            Не запрещает отправку с ящиков на сервере через Roundcube.
+          </p>
           <div className="form-row">
             <input placeholder="email / @domain.ru / IP" value={blacklistEntry} onChange={(e) => setBlacklistEntry(e.target.value)} />
             <button onClick={() => addToList('blacklist', blacklistEntry, () => setBlacklistEntry(''))}>Добавить</button>
           </div>
           <ul>{blacklist.map((e) => <li key={e}>{e} <button className="danger" onClick={() => removeFromList('blacklist', e)}>x</button></li>)}</ul>
-          {grey && <pre className="log-box">{grey.settings}</pre>}
+        </div>
+      )}
+      {canWrite && grey && (
+        <div className="card">
+          <h3>Greylisting (серый список)</h3>
+          <p className="muted">
+            Отдельная защита от спам-ботов: при первой попытке доставки сервер временно отклоняет письмо.
+            Нормальные почтовые серверы повторяют отправку, боты — обычно нет. Не связан с чёрным и белым списками.
+          </p>
+          {(() => {
+            const table = parseGreylistingTable(grey.settings)
+            if (!table) {
+              return <pre className="log-box">{grey.settings}</pre>
+            }
+            return (
+              <table>
+                <thead>
+                  <tr>{table.headers.map((header) => <th key={header}>{header}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {table.rows.map((row, index) => (
+                    <tr key={index}>
+                      {row.map((cell, cellIndex) => (
+                        <td key={cellIndex}>
+                          {cellIndex === 0 && cell.toLowerCase() === 'enabled' ? (
+                            <span className="badge">включён</span>
+                          ) : cellIndex === 0 && cell.toLowerCase() === 'disabled' ? (
+                            <span className="badge down">выключен</span>
+                          ) : (
+                            cell
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )
+          })()}
+          {parseGreylistingDomains(grey.whitelist_domains).length > 0 && (
+            <>
+              <h4 style={{ marginTop: 20, marginBottom: 8 }}>Домены без greylisting</h4>
+              <ul>
+                {parseGreylistingDomains(grey.whitelist_domains).map((domain) => (
+                  <li key={domain}>{domain}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          <p className="muted" style={{ marginTop: 16, marginBottom: 0 }}>
+            Управление greylisting через панель пока только для просмотра.
+          </p>
         </div>
       )}
     </div>
