@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
@@ -7,6 +9,9 @@ from app.auth import PanelUser, Role, client_ip, get_current_user, require_permi
 from app.config import get_config, role_has_permission
 from app.services import iredapd, mail_ops
 from app.services.iredapd import IredapdError
+from app.services.postfix_queue import PostfixQueueError
+from app.services import postfix_queue, quarantine_ops
+from app.services.quarantine_ops import QuarantineError
 from app.validators import normalize_email, validate_mailbox_password
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -99,6 +104,10 @@ class PanelUserPassword(BaseModel):
 class Fail2banUnban(BaseModel):
     jail: str
     ip: str
+
+
+class QueueFlushRequest(BaseModel):
+    confirm: Literal["FLUSH_ALL"]
 
 
 def _audit(user: PanelUser, request: Request, action: str, resource: str, details: str = "") -> None:
@@ -350,25 +359,225 @@ def put_spam(payload: SpamUpdate, request: Request, user: PanelUser = Depends(re
     return {"ok": True}
 
 
+def _quarantine_recipient_filter(user: PanelUser) -> str | None:
+    if user.role == Role.USER:
+        if not user.mailbox:
+            raise HTTPException(403, "У пользователя не привязан ящик")
+        return user.mailbox.lower()
+    return None
+
+
+def _ensure_quarantine_access(user: PanelUser, item: dict[str, Any]) -> None:
+    if user.role == Role.USER and not quarantine_ops.user_can_access_item(item, user.mailbox):
+        raise HTTPException(403, "Нет доступа к этому письму")
+
+
 @router.get("/quarantine")
-def get_quarantine(limit: int = 50, user: PanelUser = Depends(get_current_user)):
+def get_quarantine(
+    limit: int = 50,
+    offset: int = 0,
+    content: str | None = None,
+    user: PanelUser = Depends(get_current_user),
+):
     if user.role == Role.USER:
         if not role_has_permission(user.role, "quarantine.self"):
             raise HTTPException(403)
     elif not role_has_permission(user.role, "quarantine.read"):
         raise HTTPException(403)
     try:
-        return mail_ops.list_quarantine(limit)
+        recipient = _quarantine_recipient_filter(user)
+        return quarantine_ops.list_quarantine(limit, offset, recipient, content)
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
-@router.delete("/quarantine/{item_id}")
-def delete_quarantine(item_id: int, user: PanelUser = Depends(get_current_user)):
+@router.get("/quarantine/{mail_id}")
+def get_quarantine_one(
+    mail_id: str,
+    partition_tag: str = "",
+    user: PanelUser = Depends(get_current_user),
+):
+    if user.role == Role.USER:
+        if not role_has_permission(user.role, "quarantine.self"):
+            raise HTTPException(403)
+    elif not role_has_permission(user.role, "quarantine.read"):
+        raise HTTPException(403)
+    try:
+        item = quarantine_ops.get_quarantine_item(mail_id, partition_tag)
+        _ensure_quarantine_access(user, item)
+        return item
+    except QuarantineError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/quarantine/{mail_id}/body")
+def get_quarantine_body(
+    mail_id: str,
+    partition_tag: str = "",
+    user: PanelUser = Depends(get_current_user),
+):
+    if user.role == Role.USER:
+        if not role_has_permission(user.role, "quarantine.self"):
+            raise HTTPException(403)
+    elif not role_has_permission(user.role, "quarantine.read"):
+        raise HTTPException(403)
+    try:
+        body = quarantine_ops.get_quarantine_body(mail_id, partition_tag)
+        _ensure_quarantine_access(user, body)
+        return body
+    except QuarantineError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/quarantine/{mail_id}/release")
+def release_quarantine_msg(
+    mail_id: str,
+    request: Request,
+    partition_tag: str = "",
+    user: PanelUser = Depends(get_current_user),
+):
     if user.role not in (Role.ADMIN, Role.SUPERADMIN):
         raise HTTPException(403)
-    mail_ops.delete_quarantine_item(item_id)
-    return {"ok": True}
+    try:
+        item = quarantine_ops.get_quarantine_item(mail_id, partition_tag)
+        result = quarantine_ops.release_quarantine(mail_id, item["partition_tag"])
+        _audit(user, request, "release", "quarantine", mail_id)
+        return result
+    except QuarantineError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.delete("/quarantine/{mail_id}")
+def delete_quarantine_msg(
+    mail_id: str,
+    request: Request,
+    partition_tag: str = "",
+    user: PanelUser = Depends(get_current_user),
+):
+    if user.role == Role.USER:
+        if not role_has_permission(user.role, "quarantine.self"):
+            raise HTTPException(403)
+    elif user.role not in (Role.ADMIN, Role.SUPERADMIN):
+        raise HTTPException(403)
+    try:
+        item = quarantine_ops.get_quarantine_item(mail_id, partition_tag)
+        if user.role == Role.USER:
+            _ensure_quarantine_access(user, item)
+        quarantine_ops.delete_quarantine(mail_id, item["partition_tag"])
+        _audit(user, request, "delete", "quarantine", mail_id)
+        return {"ok": True}
+    except QuarantineError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/queue", dependencies=[Depends(require_permission("queue.read"))])
+def get_queue(
+    status: str | None = None,
+    sender: str | None = None,
+    recipient: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+):
+    try:
+        return postfix_queue.list_queue(status, sender, recipient, limit, offset)
+    except PostfixQueueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/queue/flush", dependencies=[Depends(require_permission("queue.write"))])
+def flush_all_queue(
+    payload: QueueFlushRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("queue.write")),
+):
+    try:
+        postfix_queue.flush_all()
+        _audit(user, request, "flush_all", "postfix_queue", "")
+        return {"ok": True}
+    except PostfixQueueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/queue/{queue_id}", dependencies=[Depends(require_permission("queue.read"))])
+def get_queue_message(queue_id: str):
+    try:
+        return postfix_queue.get_queue_message(queue_id)
+    except PostfixQueueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.delete("/queue/{queue_id}", dependencies=[Depends(require_permission("queue.write"))])
+def delete_queue_message(
+    queue_id: str,
+    request: Request,
+    user: PanelUser = Depends(require_permission("queue.write")),
+):
+    try:
+        qid = postfix_queue.delete_message(queue_id)
+        _audit(user, request, "delete", "postfix_queue", qid)
+        return {"ok": True, "queue_id": qid}
+    except PostfixQueueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/queue/{queue_id}/flush", dependencies=[Depends(require_permission("queue.write"))])
+def flush_queue_message(
+    queue_id: str,
+    request: Request,
+    user: PanelUser = Depends(require_permission("queue.write")),
+):
+    try:
+        qid = postfix_queue.flush_message(queue_id)
+        _audit(user, request, "flush", "postfix_queue", qid)
+        return {"ok": True, "queue_id": qid}
+    except PostfixQueueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/queue/{queue_id}/hold", dependencies=[Depends(require_permission("queue.write"))])
+def hold_queue_message(
+    queue_id: str,
+    request: Request,
+    user: PanelUser = Depends(require_permission("queue.write")),
+):
+    try:
+        qid = postfix_queue.hold_message(queue_id)
+        _audit(user, request, "hold", "postfix_queue", qid)
+        return {"ok": True, "queue_id": qid}
+    except PostfixQueueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/queue/{queue_id}/release", dependencies=[Depends(require_permission("queue.write"))])
+def release_queue_message(
+    queue_id: str,
+    request: Request,
+    user: PanelUser = Depends(require_permission("queue.write")),
+):
+    try:
+        qid = postfix_queue.release_message(queue_id)
+        _audit(user, request, "release", "postfix_queue", qid)
+        return {"ok": True, "queue_id": qid}
+    except PostfixQueueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/logs/search", dependencies=[Depends(require_permission("logs.read"))])

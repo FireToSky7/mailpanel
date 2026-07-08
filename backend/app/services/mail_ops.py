@@ -9,6 +9,7 @@ from typing import Any
 from app.auth import PanelUser, hash_password
 from app.config import Role, get_config
 from app.database import amavisd_conn, execute, fetch_all, fetch_one, panel_conn, vmail_conn
+from app.services import quarantine_ops
 from app.services.iredapd import hash_mailbox_password
 
 
@@ -308,8 +309,7 @@ def dashboard_stats() -> dict[str, Any]:
         aliases = fetch_all(conn, "SELECT COUNT(*) AS cnt FROM alias WHERE domain = %s", (domain,))[0]["cnt"]
     quarantine = 0
     try:
-        with amavisd_conn() as conn:
-            quarantine = fetch_all(conn, "SELECT COUNT(*) AS cnt FROM quarantine")[0]["cnt"]
+        quarantine = quarantine_ops.count_quarantine()
     except Exception:
         quarantine = -1
     with panel_conn() as conn:
@@ -324,20 +324,6 @@ def dashboard_stats() -> dict[str, Any]:
         "quarantine": quarantine,
         "audit_today": audit_today,
     }
-
-
-def list_quarantine(limit: int = 50, recipient: str | None = None) -> list[dict[str, Any]]:
-    with amavisd_conn() as conn:
-        return fetch_all(
-            conn,
-            "SELECT id, mail_id, secret_id, time_iso FROM quarantine ORDER BY id DESC LIMIT %s",
-            (limit,),
-        )
-
-
-def delete_quarantine_item(item_id: int) -> None:
-    with amavisd_conn() as conn:
-        execute(conn, "DELETE FROM quarantine WHERE id = %s", (item_id,))
 
 
 def read_spam_config() -> dict[str, str]:

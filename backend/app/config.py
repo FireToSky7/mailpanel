@@ -38,6 +38,8 @@ PERMISSIONS: dict[str, set[Role]] = {
     "quarantine.read": {Role.SUPERADMIN, Role.ADMIN, Role.VIEWER, Role.USER},
     "quarantine.write": {Role.SUPERADMIN, Role.ADMIN},
     "quarantine.self": {Role.USER},
+    "queue.read": {Role.SUPERADMIN, Role.ADMIN},
+    "queue.write": {Role.SUPERADMIN, Role.ADMIN},
     "forwarding.self": {Role.USER},
 }
 
@@ -79,11 +81,17 @@ class LogCollectorConfig(BaseModel):
     retention_days: int = 90
 
 
+class AmavisdConfig(BaseModel):
+    release_host: str = "127.0.0.1"
+    release_port: int = 9998
+
+
 class AppConfig(BaseModel):
     panel: PanelConfig
     database: DatabaseConfig
     vmail_database: DatabaseConfig
     amavisd_database: DatabaseConfig
+    amavisd: AmavisdConfig = Field(default_factory=AmavisdConfig)
     paths: PathsConfig
     services: list[str] = Field(default_factory=list)
     log_collector: LogCollectorConfig = Field(default_factory=LogCollectorConfig)

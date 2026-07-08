@@ -26,6 +26,10 @@ amavisd_database:
   password: "AMAVISD_PASSWORD"
   database: "amavisd"
 
+amavisd:
+  release_host: "127.0.0.1"
+  release_port: 9998
+
 paths:
   wblist_script: "/opt/iredapd/tools/wblist_admin.py"
   greylisting_script: "/opt/iredapd/tools/greylisting_admin.py"

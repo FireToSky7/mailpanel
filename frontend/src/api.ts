@@ -101,6 +101,53 @@ export type GreylistingData = {
   whitelist_domains: string
 }
 
+export type QuarantineItem = {
+  mail_id: string
+  secret_id: string
+  partition_tag: string
+  time_iso: string
+  content: string
+  content_label: string
+  subject: string
+  from_addr: string
+  spam_level: number | null
+  size: number
+  recipients: string[]
+}
+
+export type QuarantineBody = QuarantineItem & {
+  headers: Record<string, string>
+  text_body: string
+  html_body: string
+  attachments: { filename: string; content_type: string; size: number }[]
+  raw_size: number
+}
+
+export type QuarantineList = {
+  total: number
+  items: QuarantineItem[]
+}
+
+export type QueueItem = {
+  queue_id: string
+  size_bytes: number
+  arrival_time: string
+  sender: string | null
+  recipients: string[]
+  status: string
+  reason: string | null
+  flags: string[]
+}
+
+export type QueueList = {
+  total: number
+  active: number
+  deferred: number
+  hold: number
+  incoming: number
+  items: QueueItem[]
+}
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
 }
@@ -179,6 +226,43 @@ export const api = {
   spam: () => request<SpamConfig>('/api/spam'),
   updateSpam: (body: object) => request<{ ok: boolean }>('/api/spam', { method: 'PUT', body: JSON.stringify(body) }),
   greylisting: () => request<GreylistingData>('/api/greylisting'),
+  quarantine: (content?: string, limit = 50, offset = 0) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (content) params.set('content', content)
+    return request<QuarantineList>(`/api/quarantine?${params}`)
+  },
+  quarantineBody: (mailId: string, partitionTag = '') =>
+    request<QuarantineBody>(
+      `/api/quarantine/${encodeURIComponent(mailId)}/body${partitionTag ? `?partition_tag=${encodeURIComponent(partitionTag)}` : ''}`,
+    ),
+  releaseQuarantine: (mailId: string, partitionTag = '') =>
+    request<{ ok: boolean }>(
+      `/api/quarantine/${encodeURIComponent(mailId)}/release${partitionTag ? `?partition_tag=${encodeURIComponent(partitionTag)}` : ''}`,
+      { method: 'POST' },
+    ),
+  deleteQuarantine: (mailId: string, partitionTag = '') =>
+    request<{ ok: boolean }>(
+      `/api/quarantine/${encodeURIComponent(mailId)}${partitionTag ? `?partition_tag=${encodeURIComponent(partitionTag)}` : ''}`,
+      { method: 'DELETE' },
+    ),
+  queue: (status?: string, sender?: string, recipient?: string) => {
+    const params = new URLSearchParams()
+    if (status) params.set('status', status)
+    if (sender) params.set('sender', sender)
+    if (recipient) params.set('recipient', recipient)
+    const query = params.toString()
+    return request<QueueList>(`/api/queue${query ? `?${query}` : ''}`)
+  },
+  queueHeaders: (queueId: string) => request<{ queue_id: string; headers: string }>(`/api/queue/${encodeURIComponent(queueId)}`),
+  deleteQueueItem: (queueId: string) =>
+    request<{ ok: boolean }>(`/api/queue/${encodeURIComponent(queueId)}`, { method: 'DELETE' }),
+  flushQueueItem: (queueId: string) =>
+    request<{ ok: boolean }>(`/api/queue/${encodeURIComponent(queueId)}/flush`, { method: 'POST' }),
+  holdQueueItem: (queueId: string) =>
+    request<{ ok: boolean }>(`/api/queue/${encodeURIComponent(queueId)}/hold`, { method: 'POST' }),
+  releaseQueueItem: (queueId: string) =>
+    request<{ ok: boolean }>(`/api/queue/${encodeURIComponent(queueId)}/release`, { method: 'POST' }),
+  flushQueue: () => request<{ ok: boolean }>('/api/queue/flush', { method: 'POST', body: JSON.stringify({ confirm: 'FLUSH_ALL' }) }),
   logsSearch: (params: URLSearchParams) => request<LogsSearchResult>(`/api/logs/search?${params}`),
   logsTrace: (queueId: string) => request<LogEntry[]>(`/api/logs/trace/${queueId}`),
   logsLive: (type: string) => request<{ lines: string[] }>(`/api/logs/live/${type}`),
@@ -206,6 +290,8 @@ export function canAccess(role: string, section: string): boolean {
     mailboxes: ['superadmin', 'admin', 'viewer'],
     aliases: ['superadmin', 'admin', 'viewer'],
     antispam: ['superadmin', 'admin', 'viewer'],
+    quarantine: ['superadmin', 'admin', 'viewer', 'user'],
+    queue: ['superadmin', 'admin'],
     logs: ['superadmin', 'admin', 'viewer'],
     services: ['superadmin', 'admin', 'viewer'],
     panelUsers: ['superadmin'],
