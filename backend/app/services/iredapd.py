@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Any
 
 from app.config import get_config
+from app.services import wblist_sql
+from app.services.wblist_sql import classify_address
 
 
 class IredapdError(RuntimeError):
@@ -40,46 +42,44 @@ def _resolve_script(configured: str, default_name: str) -> Path:
 
 def _run_script(script: str, args: list[str], default_name: str) -> str:
     script_path = _resolve_script(script, default_name)
-    result = subprocess.run(
-        ["python3", script_path.name, *args],
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd=str(script_path.parent),
+    cwd = str(script_path.parent)
+    attempts: list[list[str]] = [["python3", script_path.name, *args]]
+    if os.geteuid() != 0:
+        attempts.append(["sudo", "python3", script_path.name, *args])
+
+    last_error = "Command failed"
+    for cmd in attempts:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=cwd,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+        last_error = result.stderr.strip() or result.stdout.strip() or "Command failed"
+        if "Permission denied" not in last_error and cmd[0] != "sudo":
+            break
+
+    raise IredapdError(
+        f"{last_error}\n"
+        f"Проверьте на сервере: cd {cwd} && sudo python3 {script_path.name} {' '.join(args)}"
     )
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "Command failed"
-        raise IredapdError(detail)
-    return result.stdout.strip()
 
 
 def list_wblist(list_type: str, account: str | None = None) -> list[str]:
-    cfg = get_config()
-    args = ["--list", f"--{list_type}"]
-    if account:
-        args.extend(["--account", account])
-    output = _run_script(cfg.paths.wblist_script, args, "wblist_admin.py")
-    if not output:
-        return []
-    return [line.strip() for line in output.splitlines() if line.strip() and not line.startswith("*")]
+    return wblist_sql.list_wblist(list_type, account)
 
 
 def add_wblist(list_type: str, senders: list[str], account: str | None = None, outbound: bool = False) -> None:
-    cfg = get_config()
-    args = ["--add", f"--{list_type}", *senders]
-    if account:
-        args.extend(["--account", account])
     if outbound:
-        args.append("--outbound")
-    _run_script(cfg.paths.wblist_script, args, "wblist_admin.py")
+        raise IredapdError("Исходящие списки пока не поддерживаются в панели")
+    wblist_sql.add_wblist(list_type, senders, account)
 
 
 def delete_wblist(list_type: str, senders: list[str], account: str | None = None) -> None:
-    cfg = get_config()
-    args = ["--delete", f"--{list_type}", *senders]
-    if account:
-        args.extend(["--account", account])
-    _run_script(cfg.paths.wblist_script, args, "wblist_admin.py")
+    wblist_sql.delete_wblist(list_type, senders, account)
 
 
 def list_greylisting() -> str:
@@ -130,7 +130,7 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def validate_wblist_entry(value: str) -> str:
-    value = value.strip()
-    if value.startswith("@") or re.match(r"^\d+\.\d+\.\d+\.\d+", value) or EMAIL_RE.match(value):
+    value = value.strip().lower()
+    if classify_address(value):
         return value
-    raise ValueError("Некорректная запись: укажите email, @domain.ru или IP-адрес")
+    raise ValueError("Некорректная запись: укажите email, @domain.ru, @.domain.ru или IP-адрес")
