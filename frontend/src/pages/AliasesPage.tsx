@@ -61,7 +61,7 @@ export default function AliasesPage() {
     }
   }
 
-  async function saveForwarding() {
+  async function addForwarding() {
     if (!fwdMailbox) {
       notify.error('Выберите ящик')
       return
@@ -75,43 +75,17 @@ export default function AliasesPage() {
     try {
       await api.setMailboxForwarding(fwdMailbox, target)
       setFwdTarget('')
-      notify.success(`Пересылка настроена: ${fwdMailbox} → ${target}`)
+      notify.success(`Добавлена пересылка: ${fwdMailbox} → ${target}`)
       await load()
     } catch (e) {
       notify.error(errorMessage(e))
     }
   }
 
-  async function editForwarding(address: string, current: string) {
-    const raw = prompt(
-      `Пересылка для ${address}\nУкажите адрес получателя или оставьте пустым, чтобы отключить.`,
-      current,
-    )
-    if (raw === null) return
-    const target = raw.trim()
+  async function removeForwarding(address: string, goto: string) {
+    if (!confirm(`Отключить пересылку ${address} → ${goto}?`)) return
     try {
-      if (!target) {
-        await api.clearMailboxForwarding(address)
-        notify.success('Пересылка отключена')
-      } else {
-        const emailError = validateEmail(target, 'Пересылка на')
-        if (emailError) {
-          notify.error(emailError)
-          return
-        }
-        await api.setMailboxForwarding(address, target)
-        notify.success(`Пересылка настроена: ${address} → ${target}`)
-      }
-      await load()
-    } catch (e) {
-      notify.error(errorMessage(e))
-    }
-  }
-
-  async function removeForwarding(address: string) {
-    if (!confirm(`Отключить пересылку для ${address}?`)) return
-    try {
-      await api.clearMailboxForwarding(address)
+      await api.clearMailboxForwarding(address, goto)
       notify.success('Пересылка отключена')
       await load()
     } catch (e) {
@@ -154,7 +128,7 @@ export default function AliasesPage() {
       <div className="card">
         <h3>Пересылка ящиков</h3>
         <p className="muted">
-          Копия входящей почты уходит на другой адрес. Оригинал остаётся в ящике, если не настроено иначе на сервере.
+          Можно добавить несколько адресов пересылки для одного ящика. Оригинал остаётся в ящике, если не настроено иначе на сервере.
         </p>
         {canWrite && (
           <div className="form-row" style={{ marginBottom: 16 }}>
@@ -168,7 +142,7 @@ export default function AliasesPage() {
               value={fwdTarget}
               onChange={(e) => setFwdTarget(e.target.value)}
             />
-            <button onClick={saveForwarding}>Настроить</button>
+            <button onClick={addForwarding}>Добавить</button>
           </div>
         )}
         <table>
@@ -178,13 +152,12 @@ export default function AliasesPage() {
               <tr><td colSpan={canWrite ? 3 : 2} className="muted">Пересылка не настроена</td></tr>
             )}
             {forwardings.map((f) => (
-              <tr key={f.address}>
+              <tr key={`${f.address}:${f.goto}`}>
                 <td>{f.address}</td>
                 <td>{f.goto}</td>
                 {canWrite && (
                   <td className="actions">
-                    <button className="secondary" onClick={() => editForwarding(f.address, f.goto)}>Изменить</button>
-                    <button className="danger" onClick={() => removeForwarding(f.address)}>Отключить</button>
+                    <button className="danger" onClick={() => removeForwarding(f.address, f.goto)}>Отключить</button>
                   </td>
                 )}
               </tr>

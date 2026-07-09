@@ -216,11 +216,17 @@ def put_mailbox_forwarding(
 def delete_mailbox_forwarding(
     username: str,
     request: Request,
+    goto: str | None = None,
     user: PanelUser = Depends(require_permission("mail.write")),
 ):
     address = username.lower()
-    mail_ops.clear_forwarding(address)
-    _audit(user, request, "forwarding_clear", "mailbox", address)
+    if goto:
+        target = goto.lower()
+        mail_ops.remove_forwarding(address, target)
+        _audit(user, request, "forwarding_remove", "mailbox", f"{address} -> {target}")
+    else:
+        mail_ops.clear_forwarding(address)
+        _audit(user, request, "forwarding_clear", "mailbox", address)
     return {"ok": True}
 
 

@@ -241,8 +241,13 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ goto }),
     }),
-  clearMailboxForwarding: (username: string) =>
-    request<{ ok: boolean }>(`/api/mailboxes/${encodeURIComponent(username)}/forwarding`, { method: 'DELETE' }),
+  clearMailboxForwarding: (username: string, goto?: string) => {
+    const query = goto ? `?goto=${encodeURIComponent(goto)}` : ''
+    return request<{ ok: boolean }>(
+      `/api/mailboxes/${encodeURIComponent(username)}/forwarding${query}`,
+      { method: 'DELETE' },
+    )
+  },
   forwardings: () => request<ForwardingEntry[]>('/api/forwardings'),
   aliases: () => request<Alias[]>('/api/aliases'),
   createAlias: (body: object) => request<{ ok: boolean }>('/api/aliases', { method: 'POST', body: JSON.stringify(body) }),
