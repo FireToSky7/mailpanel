@@ -60,7 +60,22 @@ export default function RulesPage() {
     }
   }
 
+  async function reapply() {
+    try {
+      const res = await api.reapplyContentFilters()
+      if (res.warnings?.length) {
+        notify.success(`Правила применены. ${res.warnings.join(' ')}`)
+      } else {
+        notify.success('Правила применены')
+      }
+      await load()
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
+  }
+
   const items = data?.items ?? []
+  const diagnostics = data?.diagnostics
 
   return (
     <div>
@@ -71,7 +86,30 @@ export default function RulesPage() {
         <p className="muted">
           Если во входящем письме в теме или тексте встречается указанная строка, письмо попадает в карантин
           (тип «Спам»). Поиск без учёта регистра, по вхождению подстроки.
+          Для писем между ящиками на этом сервере нужна проверка внутренней почты в Amavis.
         </p>
+        {diagnostics && (
+          <div className="muted" style={{ marginBottom: 16 }}>
+            <div>Правил активно: {diagnostics.active_rules}</div>
+            <div>
+              Проверка внутренней почты:{' '}
+              {diagnostics.scan_internal_mail ? (
+                <span className="badge">включена</span>
+              ) : (
+                <span className="badge down">выключена</span>
+              )}
+            </div>
+            <div>
+              Правила в local.cf: {diagnostics.rules_in_local_cf ? 'да' : 'нет'}
+              {diagnostics.local_cf_exists ? ` (${diagnostics.local_cf})` : ''}
+            </div>
+            {canWrite && (
+              <button className="secondary" style={{ marginTop: 10 }} onClick={reapply}>
+                Применить правила заново
+              </button>
+            )}
+          </div>
+        )}
         {canWrite && (
           <div className="form-row" style={{ marginBottom: 16 }}>
             <select value={field} onChange={(e) => setField(e.target.value as 'subject' | 'body')}>

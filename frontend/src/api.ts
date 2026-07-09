@@ -95,6 +95,13 @@ export type ContentFiltersData = {
   total: number
   source_file: string
   rules_file: string
+  diagnostics?: {
+    local_cf: string
+    local_cf_exists: boolean
+    rules_in_local_cf: boolean
+    active_rules: number
+    scan_internal_mail: boolean
+  }
   notes: string[]
 }
 
@@ -346,6 +353,11 @@ export const api = {
     }),
   deleteContentFilter: (ruleId: string) =>
     request<{ ok: boolean }>(`/api/rules/${encodeURIComponent(ruleId)}`, { method: 'DELETE' }),
+  reapplyContentFilters: () =>
+    request<{ ok: boolean; warnings: string[]; diagnostics: ContentFiltersData['diagnostics'] }>(
+      '/api/rules/reapply',
+      { method: 'POST' },
+    ),
   greylisting: () => request<GreylistingData>('/api/greylisting'),
   quarantine: (content?: string, limit = 50, offset = 0) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })

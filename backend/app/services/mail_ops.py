@@ -459,10 +459,22 @@ def read_spam_config() -> dict[str, str]:
 
 def write_spam_config(required_score: float, extra_rules: str = "") -> None:
     path = Path(get_config().paths.spamassassin_config)
+    content = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+    preserved_block = ""
+    marker_pattern = (
+        r"# MAILPANEL_SA_FILTERS_BEGIN.*?# MAILPANEL_SA_FILTERS_END"
+    )
+    match = re.search(marker_pattern, content, flags=re.DOTALL)
+    if match:
+        preserved_block = match.group(0).rstrip() + "\n"
     lines = ["# Managed by MailPanel", f"required_score {required_score}", ""]
     if extra_rules.strip():
         lines.extend([extra_rules.strip(), ""])
-    path.write_text("\n".join(lines), encoding="utf-8")
+    if preserved_block:
+        lines.append(preserved_block.rstrip())
+        lines.append("")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     subprocess.run(["systemctl", "restart", "amavisd"], check=False)
 
 

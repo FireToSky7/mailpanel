@@ -559,6 +559,16 @@ def get_content_filters():
     return content_filter_ops.list_content_filters()
 
 
+@router.post("/rules/reapply", dependencies=[Depends(require_permission("antispam.write"))])
+def reapply_content_filters(user: PanelUser = Depends(require_permission("antispam.write"))):
+    try:
+        return content_filter_ops.reapply_content_filters()
+    except ContentFilterError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, f"Не удалось применить правила: {exc}") from exc
+
+
 @router.post("/rules", dependencies=[Depends(require_permission("antispam.write"))])
 def post_content_filter(
     payload: ContentFilterCreate,
@@ -580,7 +590,10 @@ def post_content_filter(
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(400, f"Не удалось создать правило: {exc}") from exc
-    return {"ok": True, "item": rule}
+    response: dict[str, Any] = {"ok": True, "item": rule}
+    if rule.get("warnings"):
+        response["warnings"] = rule["warnings"]
+    return response
 
 
 @router.put("/rules/{rule_id}", dependencies=[Depends(require_permission("antispam.write"))])
