@@ -61,6 +61,39 @@ def _parse_arrival_time(value: str) -> str:
         return value
 
 
+def _parse_recipients_field(recipients: Any) -> tuple[list[str], str | None]:
+    addresses: list[str] = []
+    reasons: list[str] = []
+
+    if isinstance(recipients, dict):
+        for key, value in recipients.items():
+            addresses.append(str(key))
+            if isinstance(value, dict):
+                reason = value.get("delay_reason") or value.get("reason")
+                if reason:
+                    reasons.append(str(reason))
+    elif isinstance(recipients, list):
+        for item in recipients:
+            if isinstance(item, str):
+                addresses.append(item)
+            elif isinstance(item, dict):
+                addr = item.get("address") or item.get("recipient") or item.get("name")
+                if addr:
+                    addresses.append(str(addr))
+                reason = item.get("delay_reason") or item.get("reason")
+                if reason:
+                    reasons.append(str(reason))
+            elif item is not None:
+                addresses.append(str(item))
+    elif recipients:
+        addresses.append(str(recipients))
+
+    unique_addresses = list(dict.fromkeys(addr.strip() for addr in addresses if addr.strip()))
+    unique_reasons = list(dict.fromkeys(reason.strip() for reason in reasons if reason and reason.strip()))
+    reason = "; ".join(unique_reasons) if unique_reasons else None
+    return unique_addresses, reason
+
+
 def _parse_postqueue_text(output: str) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
@@ -108,23 +141,22 @@ def _parse_postqueue_json(output: str) -> list[dict[str, Any]]:
             row = json.loads(line)
         except json.JSONDecodeError:
             continue
-        recipients = row.get("recipients") or []
-        if isinstance(recipients, dict):
-            recipients = list(recipients.keys())
+        recipient_addresses, recipient_reason = _parse_recipients_field(row.get("recipients"))
         arrival = row.get("arrival_time")
         if isinstance(arrival, int):
             arrival_time = datetime.fromtimestamp(arrival).isoformat(sep=" ", timespec="seconds")
         else:
             arrival_time = str(arrival or "")
+        reason = row.get("reason") or row.get("delay_reason") or recipient_reason
         items.append(
             {
                 "queue_id": row.get("queue_id", ""),
                 "size_bytes": int(row.get("message_size") or 0),
                 "arrival_time": arrival_time,
                 "sender": row.get("sender") or None,
-                "recipients": recipients,
+                "recipients": recipient_addresses,
                 "status": _status_from_flag("", row.get("queue_name")),
-                "reason": row.get("reason") or row.get("delay_reason"),
+                "reason": reason,
                 "flags": [],
             }
         )

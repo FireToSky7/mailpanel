@@ -11,6 +11,32 @@ const STATUS_OPTIONS = [
   { value: 'incoming', label: 'Входящие' },
 ]
 
+const STATUS_LABELS: Record<string, string> = {
+  active: 'активное',
+  deferred: 'отложено',
+  hold: 'на удержании',
+  incoming: 'входящее',
+  corrupt: 'повреждено',
+}
+
+function statusLabel(status: string): string {
+  return STATUS_LABELS[status] || status
+}
+
+function formatRecipients(recipients: QueueItem['recipients']): string {
+  return recipients
+    .map((recipient) => {
+      if (typeof recipient === 'string') return recipient
+      if (recipient && typeof recipient === 'object') {
+        const value = recipient as { address?: string; recipient?: string }
+        return value.address || value.recipient || ''
+      }
+      return String(recipient ?? '')
+    })
+    .filter(Boolean)
+    .join(', ')
+}
+
 export default function QueuePage() {
   const [data, setData] = useState({
     total: 0,
@@ -65,12 +91,14 @@ export default function QueuePage() {
       <div className="card">
         <p className="muted">
           Письма, ожидающие доставки или повторной отправки. Удаление безвозвратно.
+          Внутренняя почта обычно проходит через Amavis — если письма зависают в статусе «активное»,
+          проверьте службу amavisd на вкладке «Службы». Для отложенных смотрите столбец «Причина».
         </p>
         <div className="grid">
           <div className="stat"><div className="label">Всего</div><div className="value">{data.total}</div></div>
           <div className="stat"><div className="label">Активные</div><div className="value">{data.active}</div></div>
           <div className="stat"><div className="label">Отложенные</div><div className="value">{data.deferred}</div></div>
-          <div className="stat"><div className="label">Hold</div><div className="value">{data.hold}</div></div>
+          <div className="stat"><div className="label">На удержании</div><div className="value">{data.hold}</div></div>
         </div>
         <div className="form-row" style={{ marginTop: 16 }}>
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -109,43 +137,54 @@ export default function QueuePage() {
             </tr>
           </thead>
           <tbody>
-            {data.items.map((item) => (
-              <tr key={item.queue_id}>
-                <td title={item.queue_id}><code>{item.queue_id}</code></td>
-                <td><span className={`badge ${item.status === 'deferred' ? 'down' : ''}`}>{item.status}</span></td>
-                <td title={item.arrival_time}>{item.arrival_time}</td>
-                <td title={item.sender || ''}>{item.sender || '—'}</td>
-                <td title={item.recipients.join(', ')}>{item.recipients.join(', ') || '—'}</td>
-                <td>{item.size_bytes} B</td>
-                <td title={item.reason || ''}>{item.reason || '—'}</td>
-                <td className="actions">
-                  <button
-                    className="secondary"
-                    onClick={async () => {
-                      try {
-                        const res = await api.queueHeaders(item.queue_id)
-                        setHeaders(res.headers)
-                      } catch (e) {
-                        notify.error(errorMessage(e))
-                      }
-                    }}
-                  >
-                    Заголовки
-                  </button>
-                  {canWrite && (
-                    <>
-                      <button onClick={() => act(api.flushQueueItem, item, 'Повторить')}>Повторить</button>
-                      {item.status === 'hold' ? (
-                        <button className="secondary" onClick={() => act(api.releaseQueueItem, item, 'Снять hold')}>Снять hold</button>
-                      ) : (
-                        <button className="secondary" onClick={() => act(api.holdQueueItem, item, 'Hold')}>Hold</button>
-                      )}
-                      <button className="danger" onClick={() => act(api.deleteQueueItem, item, 'Удалить')}>Удалить</button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {data.items.map((item) => {
+              const recipientsText = formatRecipients(item.recipients)
+              return (
+                <tr key={item.queue_id}>
+                  <td title={item.queue_id}><code>{item.queue_id}</code></td>
+                  <td>
+                    <span className={`badge ${item.status === 'deferred' ? 'down' : ''}`}>
+                      {statusLabel(item.status)}
+                    </span>
+                  </td>
+                  <td title={item.arrival_time}>{item.arrival_time}</td>
+                  <td title={item.sender || ''}>{item.sender || '—'}</td>
+                  <td title={recipientsText}>{recipientsText || '—'}</td>
+                  <td>{item.size_bytes} B</td>
+                  <td title={item.reason || ''}>{item.reason || '—'}</td>
+                  <td className="actions">
+                    <button
+                      className="secondary"
+                      onClick={async () => {
+                        try {
+                          const res = await api.queueHeaders(item.queue_id)
+                          setHeaders(res.headers)
+                        } catch (e) {
+                          notify.error(errorMessage(e))
+                        }
+                      }}
+                    >
+                      Заголовки
+                    </button>
+                    {canWrite && (
+                      <>
+                        <button onClick={() => act(api.flushQueueItem, item, 'Повторить')}>Повторить</button>
+                        {item.status === 'hold' ? (
+                          <button className="secondary" onClick={() => act(api.releaseQueueItem, item, 'Снять удержание')}>
+                            Снять удержание
+                          </button>
+                        ) : (
+                          <button className="secondary" onClick={() => act(api.holdQueueItem, item, 'Удержать')}>
+                            Удержать
+                          </button>
+                        )}
+                        <button className="danger" onClick={() => act(api.deleteQueueItem, item, 'Удалить')}>Удалить</button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
         {!data.items.length && <p className="muted">Очередь пуста</p>}
