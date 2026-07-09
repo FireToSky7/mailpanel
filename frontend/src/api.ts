@@ -52,6 +52,19 @@ export type SpamConfig = {
   required_score: string
 }
 
+export type BannedExtensionsData = {
+  extensions: string[]
+  markers_present: boolean
+  source_file: string
+}
+
+export type MailPolicyData = {
+  scan_internal_mail: boolean
+  include_present: boolean
+  bypass_banned_active: boolean
+  notes: string[]
+}
+
 export type AuditEntry = {
   id: number
   username: string
@@ -225,6 +238,18 @@ export const api = {
     request<{ ok: boolean }>(`/api/wblist/${type}`, { method: 'DELETE', body: JSON.stringify({ entries, account }) }),
   spam: () => request<SpamConfig>('/api/spam'),
   updateSpam: (body: object) => request<{ ok: boolean }>('/api/spam', { method: 'PUT', body: JSON.stringify(body) }),
+  bannedExtensions: () => request<BannedExtensionsData>('/api/antispam/banned-extensions'),
+  updateBannedExtensions: (extensions: string[]) =>
+    request<{ ok: boolean; extensions: string[] }>('/api/antispam/banned-extensions', {
+      method: 'PUT',
+      body: JSON.stringify({ extensions }),
+    }),
+  mailPolicy: () => request<MailPolicyData>('/api/antispam/mail-policy'),
+  updateMailPolicy: (scan_internal_mail: boolean) =>
+    request<{ ok: boolean; scan_internal_mail: boolean }>('/api/antispam/mail-policy', {
+      method: 'PUT',
+      body: JSON.stringify({ scan_internal_mail }),
+    }),
   greylisting: () => request<GreylistingData>('/api/greylisting'),
   quarantine: (content?: string, limit = 50, offset = 0) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })

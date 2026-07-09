@@ -73,6 +73,9 @@ class PathsConfig(BaseModel):
     iredapd_log: str
     dovecot_log: str
     messages_log: str
+    amavisd_config: str = "/etc/amavisd/amavisd.conf"
+    banned_extensions_file: str = "/etc/mailpanel/banned_extensions.txt"
+    antispam_policy_file: str = "/etc/mailpanel/antispam_policy.yaml"
 
 
 class LogCollectorConfig(BaseModel):

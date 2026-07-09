@@ -7,7 +7,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.auth import PanelUser, Role, client_ip, get_current_user, require_permission, write_audit
 from app.config import get_config, role_has_permission
-from app.services import iredapd, mail_ops
+from app.services import amavis_policy, iredapd, mail_ops
+from app.services.amavis_policy import AmavisPolicyError
 from app.services.iredapd import IredapdError
 from app.services.postfix_queue import PostfixQueueError
 from app.services import postfix_queue, quarantine_ops
@@ -87,6 +88,14 @@ class GreylistDomainRequest(BaseModel):
 class SpamUpdate(BaseModel):
     required_score: float = Field(ge=0, le=20)
     extra_rules: str = ""
+
+
+class BannedExtensionsUpdate(BaseModel):
+    extensions: list[str] = Field(min_length=1)
+
+
+class MailPolicyUpdate(BaseModel):
+    scan_internal_mail: bool
 
 
 class PanelUserCreate(BaseModel):
@@ -357,6 +366,56 @@ def put_spam(payload: SpamUpdate, request: Request, user: PanelUser = Depends(re
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True}
+
+
+@router.get("/antispam/banned-extensions", dependencies=[Depends(require_permission("antispam.read"))])
+def get_banned_extensions():
+    try:
+        return amavis_policy.read_banned_extensions()
+    except AmavisPolicyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.put("/antispam/banned-extensions", dependencies=[Depends(require_permission("antispam.write"))])
+def put_banned_extensions(
+    payload: BannedExtensionsUpdate,
+    request: Request,
+    user: PanelUser = Depends(require_permission("antispam.write")),
+):
+    try:
+        result = amavis_policy.write_banned_extensions(payload.extensions)
+        _audit(user, request, "banned_extensions", "amavisd", ", ".join(result["extensions"]))
+    except (AmavisPolicyError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return result
+
+
+@router.get("/antispam/mail-policy", dependencies=[Depends(require_permission("antispam.read"))])
+def get_mail_policy():
+    try:
+        return amavis_policy.read_mail_policy()
+    except AmavisPolicyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.put("/antispam/mail-policy", dependencies=[Depends(require_permission("antispam.write"))])
+def put_mail_policy(
+    payload: MailPolicyUpdate,
+    request: Request,
+    user: PanelUser = Depends(require_permission("antispam.write")),
+):
+    try:
+        result = amavis_policy.write_mail_policy(payload.scan_internal_mail)
+        _audit(
+            user,
+            request,
+            "mail_policy",
+            "amavisd",
+            f"scan_internal_mail={payload.scan_internal_mail}",
+        )
+    except AmavisPolicyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return result
 
 
 def _quarantine_recipient_filter(user: PanelUser) -> str | None:

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, getUser, type GreylistingData } from '../api'
+import { api, getUser, type GreylistingData, type MailPolicyData } from '../api'
 import { errorMessage } from '../errors'
 
 function parseGreylistingTable(raw: string): { headers: string[]; rows: string[][] } | null {
@@ -25,6 +25,10 @@ export default function AntispamPage() {
   const [account, setAccount] = useState('')
   const [score, setScore] = useState('5.0')
   const [grey, setGrey] = useState<GreylistingData | null>(null)
+  const [bannedExtensions, setBannedExtensions] = useState<string[]>([])
+  const [bannedEntry, setBannedEntry] = useState('')
+  const [mailPolicy, setMailPolicy] = useState<MailPolicyData | null>(null)
+  const [scanInternal, setScanInternal] = useState(false)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const role = getUser()?.role
@@ -64,6 +68,23 @@ export default function AntispamPage() {
       } catch (e) {
         errors.push(`Greylisting: ${errorMessage(e)}`)
         setGrey(null)
+      }
+
+      try {
+        const banned = await api.bannedExtensions()
+        setBannedExtensions(banned.extensions)
+      } catch (e) {
+        errors.push(`Запрещённые файлы: ${errorMessage(e)}`)
+        setBannedExtensions([])
+      }
+
+      try {
+        const policy = await api.mailPolicy()
+        setMailPolicy(policy)
+        setScanInternal(policy.scan_internal_mail)
+      } catch (e) {
+        errors.push(`Политика почты: ${errorMessage(e)}`)
+        setMailPolicy(null)
       }
     }
 
@@ -118,6 +139,62 @@ export default function AntispamPage() {
     }
   }
 
+  function normalizeExtension(value: string): string {
+    const trimmed = value.trim().toLowerCase().replace(/^\./, '')
+    if (!/^[a-z0-9]{1,16}$/.test(trimmed)) {
+      throw new Error('Расширение: только латиница и цифры, до 16 символов')
+    }
+    return `.${trimmed}`
+  }
+
+  async function addBannedExtensionAction() {
+    setError('')
+    setInfo('')
+    try {
+      const ext = normalizeExtension(bannedEntry)
+      if (bannedExtensions.includes(ext)) {
+        setError('Такое расширение уже в списке')
+        return
+      }
+      const next = [...bannedExtensions, ext].sort()
+      await api.updateBannedExtensions(next)
+      setBannedEntry('')
+      setInfo('Список запрещённых расширений сохранён, Amavis перезапущен')
+      await load()
+    } catch (e) {
+      setError(errorMessage(e))
+    }
+  }
+
+  async function removeBannedExtension(ext: string) {
+    setError('')
+    setInfo('')
+    if (bannedExtensions.length <= 1) {
+      setError('Должно остаться хотя бы одно расширение')
+      return
+    }
+    try {
+      const next = bannedExtensions.filter((item) => item !== ext)
+      await api.updateBannedExtensions(next)
+      setInfo('Список запрещённых расширений сохранён')
+      await load()
+    } catch (e) {
+      setError(errorMessage(e))
+    }
+  }
+
+  async function saveMailPolicy() {
+    setError('')
+    setInfo('')
+    try {
+      await api.updateMailPolicy(scanInternal)
+      setInfo(scanInternal ? 'Проверка внутренней почты включена' : 'Проверка внутренней почты отключена')
+      await load()
+    } catch (e) {
+      setError(errorMessage(e))
+    }
+  }
+
   return (
     <div>
       <div className="topbar"><h2>Антиспам</h2></div>
@@ -131,6 +208,55 @@ export default function AntispamPage() {
             <button onClick={saveScore}>Сохранить</button>
           </div>
           <p className="muted">Чем выше значение, тем меньше писем попадёт в спам. Обычно 5.0–7.0.</p>
+        </div>
+      )}
+      {canWrite && (
+        <div className="card">
+          <h3>Запрещённые типы файлов (вложения)</h3>
+          <p className="muted">
+            Расширения, при которых Amavis блокирует письмо (карантин или отбраковка).
+            Изменения записываются в amavisd.conf и перезапускают Amavis.
+          </p>
+          <div className="form-row">
+            <input
+              placeholder="exe, bat, ps1…"
+              value={bannedEntry}
+              onChange={(e) => setBannedEntry(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addBannedExtensionAction()}
+            />
+            <button onClick={addBannedExtensionAction}>Добавить</button>
+          </div>
+          <ul>
+            {bannedExtensions.map((ext) => (
+              <li key={ext}>
+                {ext}
+                <button className="danger" onClick={() => removeBannedExtension(ext)}>x</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {canWrite && mailPolicy && (
+        <div className="card">
+          <h3>Проверка внутренней почты</h3>
+          <p className="muted">
+            По умолчанию письма с localhost и часть внутреннего трафика могут обходить антиспам и проверку вложений.
+            При включении MailPanel настраивает Amavis на проверку исходящей и локальной почты (политика ORIGINATING).
+          </p>
+          <label className="form-row" style={{ alignItems: 'center', gap: 10 }}>
+            <input
+              type="checkbox"
+              checked={scanInternal}
+              onChange={(e) => setScanInternal(e.target.checked)}
+            />
+            Проверять внутреннюю почту (спам, запрещённые вложения)
+          </label>
+          <div className="form-row" style={{ marginTop: 10 }}>
+            <button onClick={saveMailPolicy}>Сохранить политику</button>
+          </div>
+          {mailPolicy.notes.map((note) => (
+            <p key={note} className="muted" style={{ marginBottom: 4 }}>{note}</p>
+          ))}
         </div>
       )}
       <div className="card">
