@@ -92,8 +92,18 @@ export default function QueuePage() {
       </div>
       {error && <div className="error prewrap card">{error}</div>}
       {info && <div className="info card">{info}</div>}
-      <div className="card">
-        <table>
+      <div className="card table-scroll">
+        <table className="data-table">
+          <colgroup>
+            <col className="col-queue-id" />
+            <col className="col-status" />
+            <col className="col-time" />
+            <col />
+            <col />
+            <col className="col-size" />
+            <col className="col-reason" />
+            <col className="col-actions" />
+          </colgroup>
           <thead>
             <tr>
               <th>Queue-ID</th>
@@ -103,19 +113,19 @@ export default function QueuePage() {
               <th>Кому</th>
               <th>Размер</th>
               <th>Причина</th>
-              <th></th>
+              <th className="col-actions"></th>
             </tr>
           </thead>
           <tbody>
             {data.items.map((item) => (
               <tr key={item.queue_id}>
-                <td><code>{item.queue_id}</code></td>
+                <td title={item.queue_id}><code>{item.queue_id}</code></td>
                 <td><span className={`badge ${item.status === 'deferred' ? 'down' : ''}`}>{item.status}</span></td>
-                <td>{item.arrival_time}</td>
-                <td>{item.sender || '—'}</td>
-                <td>{item.recipients.join(', ') || '—'}</td>
+                <td title={item.arrival_time}>{item.arrival_time}</td>
+                <td title={item.sender || ''}>{item.sender || '—'}</td>
+                <td title={item.recipients.join(', ')}>{item.recipients.join(', ') || '—'}</td>
                 <td>{item.size_bytes} B</td>
-                <td>{item.reason || '—'}</td>
+                <td title={item.reason || ''}>{item.reason || '—'}</td>
                 <td className="actions">
                   <button
                     className="secondary"

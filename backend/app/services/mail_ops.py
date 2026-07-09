@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import socket
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -344,9 +345,48 @@ def write_spam_config(required_score: float, extra_rules: str = "") -> None:
     subprocess.run(["systemctl", "restart", "amavisd"], check=False)
 
 
+def _systemctl_value(name: str, prop: str) -> str:
+    result = subprocess.run(
+        ["systemctl", "show", name, f"-p{prop}", "--value"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip()
+
+
+def _tcp_port_open(port: int, host: str = "127.0.0.1") -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
 def service_status(name: str) -> dict[str, str]:
-    result = subprocess.run(["systemctl", "is-active", name], capture_output=True, text=True, check=False)
-    return {"name": name, "status": result.stdout.strip() or "unknown"}
+    active = subprocess.run(
+        ["systemctl", "is-active", name],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip() or "unknown"
+    enabled = _systemctl_value(name, "UnitFileState") or "unknown"
+
+    health = "ok"
+    detail = ""
+    if active != "active":
+        health = "failed" if active == "failed" else "stopped"
+    elif name == "amavisd" and not _tcp_port_open(10024):
+        health = "degraded"
+        detail = "Служба active, но порт 10024 не отвечает — фильтрация почты не работает"
+
+    return {
+        "name": name,
+        "status": active,
+        "enabled": enabled,
+        "health": health,
+        "detail": detail,
+    }
 
 
 def restart_service(name: str) -> dict[str, str]:

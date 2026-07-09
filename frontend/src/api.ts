@@ -31,6 +31,9 @@ export type Alias = {
 export type ServiceStatus = {
   name: string
   status: string
+  enabled?: string
+  health?: 'ok' | 'degraded' | 'stopped' | 'failed'
+  detail?: string
 }
 
 export type Fail2banJail = {

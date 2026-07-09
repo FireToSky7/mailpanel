@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, getUser, type GreylistingData, type MailPolicyData } from '../api'
+import EntryList from '../components/EntryList'
 import { errorMessage } from '../errors'
 
 function parseGreylistingTable(raw: string): { headers: string[]; rows: string[][] } | null {
@@ -226,14 +227,12 @@ export default function AntispamPage() {
             />
             <button onClick={addBannedExtensionAction}>Добавить</button>
           </div>
-          <ul>
-            {bannedExtensions.map((ext) => (
-              <li key={ext}>
-                {ext}
-                <button className="danger" onClick={() => removeBannedExtension(ext)}>x</button>
-              </li>
-            ))}
-          </ul>
+          <EntryList
+            items={bannedExtensions}
+            canRemove
+            onRemove={removeBannedExtension}
+            emptyText="Список пуст"
+          />
         </div>
       )}
       {canWrite && mailPolicy && (
@@ -276,7 +275,12 @@ export default function AntispamPage() {
           <input placeholder="email / @domain.ru / IP" value={whitelistEntry} onChange={(e) => setWhitelistEntry(e.target.value)} />
           <button onClick={() => addToList('whitelist', whitelistEntry, () => setWhitelistEntry(''))}>Добавить</button>
         </div>
-        <ul>{whitelist.map((e) => <li key={e}>{e} {(canWrite || isUser) && <button className="danger" onClick={() => removeFromList('whitelist', e)}>x</button>}</li>)}</ul>
+        <EntryList
+          items={whitelist}
+          canRemove={canWrite || isUser}
+          onRemove={(entry) => removeFromList('whitelist', entry)}
+          emptyText="Список пуст"
+        />
       </div>
       {canWrite && (
         <div className="card">
@@ -289,7 +293,12 @@ export default function AntispamPage() {
             <input placeholder="email / @domain.ru / IP" value={blacklistEntry} onChange={(e) => setBlacklistEntry(e.target.value)} />
             <button onClick={() => addToList('blacklist', blacklistEntry, () => setBlacklistEntry(''))}>Добавить</button>
           </div>
-          <ul>{blacklist.map((e) => <li key={e}>{e} <button className="danger" onClick={() => removeFromList('blacklist', e)}>x</button></li>)}</ul>
+          <EntryList
+            items={blacklist}
+            canRemove
+            onRemove={(entry) => removeFromList('blacklist', entry)}
+            emptyText="Список пуст"
+          />
         </div>
       )}
       {canWrite && grey && (

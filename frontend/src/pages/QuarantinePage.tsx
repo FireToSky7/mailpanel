@@ -92,8 +92,17 @@ export default function QuarantinePage() {
       </div>
       {error && <div className="error prewrap card">{error}</div>}
       {info && <div className="info card">{info}</div>}
-      <div className="card">
-        <table>
+      <div className="card table-scroll">
+        <table className="data-table">
+          <colgroup>
+            <col className="col-time" />
+            <col />
+            <col />
+            <col />
+            <col className="col-type" />
+            <col className="col-size" />
+            <col className="col-actions" />
+          </colgroup>
           <thead>
             <tr>
               <th>Время</th>
@@ -102,16 +111,16 @@ export default function QuarantinePage() {
               <th>Тема</th>
               <th>Тип</th>
               <th>Размер</th>
-              <th></th>
+              <th className="col-actions"></th>
             </tr>
           </thead>
           <tbody>
             {items.map((item) => (
               <tr key={`${item.partition_tag}:${item.mail_id}`}>
-                <td>{item.time_iso}</td>
-                <td>{item.from_addr}</td>
-                <td>{item.recipients.join(', ')}</td>
-                <td>{item.subject}</td>
+                <td title={item.time_iso}>{item.time_iso}</td>
+                <td title={item.from_addr}>{item.from_addr}</td>
+                <td title={item.recipients.join(', ')}>{item.recipients.join(', ')}</td>
+                <td title={item.subject}>{item.subject}</td>
                 <td>{item.content_label}</td>
                 <td>{item.size} B</td>
                 <td className="actions">

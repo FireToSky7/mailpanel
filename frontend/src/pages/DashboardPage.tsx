@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import ServiceStatusBadge from '../components/ServiceStatusBadge'
 
 export default function DashboardPage() {
   const [data, setData] = useState<any>(null)
@@ -24,11 +25,17 @@ export default function DashboardPage() {
       </div>
       <div className="card" style={{ marginTop: 20 }}>
         <h3>Службы</h3>
-        <table>
-          <thead><tr><th>Служба</th><th>Статус</th></tr></thead>
+        <table className="data-table">
+          <thead><tr><th>Служба</th><th className="col-status">Статус</th></tr></thead>
           <tbody>
             {data.services.map((s: any) => (
-              <tr key={s.name}><td>{s.name}</td><td><span className={`badge ${s.status === 'active' ? '' : 'down'}`}>{s.status}</span></td></tr>
+              <tr key={s.name}>
+                <td>
+                  <div>{s.name}</div>
+                  {s.detail && <div className="service-detail">{s.detail}</div>}
+                </td>
+                <td><ServiceStatusBadge service={s} /></td>
+              </tr>
             ))}
           </tbody>
         </table>
