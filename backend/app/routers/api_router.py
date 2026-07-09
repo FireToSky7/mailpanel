@@ -578,6 +578,8 @@ def post_content_filter(
         raise HTTPException(400, str(exc)) from exc
     except ContentFilterError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, f"Не удалось создать правило: {exc}") from exc
     return {"ok": True, "item": rule}
 
 

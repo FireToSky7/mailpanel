@@ -6,6 +6,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+from app.config import get_config
+
 MARKER_FILTERS_BEGIN = "# MAILPANEL_FILTERS_BEGIN"
 MARKER_FILTERS_END = "# MAILPANEL_FILTERS_END"
 MARKER_SA_INCLUDE_BEGIN = "# MAILPANEL_SA_FILTERS_BEGIN"
@@ -37,7 +41,17 @@ def spamassassin_filters_path() -> Path:
 
 
 def spamassassin_config_path() -> Path:
-    return Path(get_config().paths.spamassassin_config)
+    configured = Path(get_config().paths.spamassassin_config)
+    if configured.is_file():
+        return configured
+    for candidate in (
+        configured,
+        Path("/etc/mail/spamassassin/local.cf"),
+        Path("/etc/spamassassin/local.cf"),
+    ):
+        if candidate.is_file():
+            return candidate
+    return configured
 
 
 def _validate_pattern(pattern: str) -> str:
@@ -159,11 +173,17 @@ def _apply_filters(filters: list[dict[str, Any]]) -> None:
     filters_path.write_text(_build_spamassassin_rules(filters), encoding="utf-8")
 
     local_cf = spamassassin_config_path()
-    if not local_cf.exists():
-        raise ContentFilterError(f"Файл SpamAssassin не найден: {local_cf}")
-    content = local_cf.read_text(encoding="utf-8", errors="replace")
-    content = _ensure_local_cf_include(content, filters_path)
-    local_cf.write_text(content, encoding="utf-8")
+    if not local_cf.is_file():
+        raise ContentFilterError(
+            f"Файл SpamAssassin local.cf не найден: {local_cf}. "
+            "Проверьте paths.spamassassin_config в config.yaml"
+        )
+    try:
+        content = local_cf.read_text(encoding="utf-8", errors="replace")
+        content = _ensure_local_cf_include(content, filters_path)
+        local_cf.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        raise ContentFilterError(f"Не удалось обновить {local_cf}: {exc}") from exc
     _restart_amavisd()
 
 
