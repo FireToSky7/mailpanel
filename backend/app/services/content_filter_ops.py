@@ -201,6 +201,12 @@ sub _decode_header {{
   $value =~ s/\\n([ \\t])/$1/sg;
   $value =~ s/^[ \\t]+//s;
   $value =~ s/[ \\t]+\\z//s;
+  my $raw = $value;
+  eval {{
+    require MIME::Words;
+    my $decoded = MIME::Words::decode_mime_words($raw);
+    $value = $decoded if defined $decoded && length $decoded;
+  }};
   return $value;
 }}
 
@@ -226,12 +232,13 @@ sub _read_body_sample {{
 
 sub checks {{
   my ($self, $conn, $msginfo) = @_;
-  my $subject = _decode_header($msginfo->get_header_field_body('subject'));
+  my $subject_raw = $msginfo->get_header_field_body('subject');
+  my $subject = _decode_header($subject_raw);
   my $matched = 0;
   my $matched_field = '';
 
   for my $pat (@MAILPANEL_SUBJECT_PATTERNS) {{
-    if ($subject =~ $pat) {{
+    if ($subject =~ $pat || (defined $subject_raw && $subject_raw =~ $pat)) {{
       $matched = 1;
       $matched_field = 'subject';
       last;
@@ -258,7 +265,7 @@ sub checks {{
     next if $r->recip_done;
     $r->add_contents_category(CC_SPAM, 999);
     $r->spam_level(999);
-    do_log(1, "MAILPANEL: content filter matched in %s for <%s>", $matched_field, $r->recip_addr);
+    do_log(0, "MAILPANEL: content filter matched in %s for <%s>", $matched_field, $r->recip_addr);
   }}
 }}
 
