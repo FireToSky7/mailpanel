@@ -361,6 +361,26 @@ def get_forwarding(username: str) -> str | None:
     return ", ".join(targets)
 
 
+def _check_forward_loop(conn, username: str, goto: str) -> None:
+    """Проверяет, не создаст ли пересылка username → goto замкнутый цикл."""
+    username = username.lower()
+    goto = goto.lower()
+    visited: set[str] = {username}
+    pending = [goto]
+    while pending:
+        current = pending.pop(0)
+        if current == username:
+            raise ValueError(
+                f"Петля пересылки: {goto} уже ведёт обратно на {username}. "
+                f"Письма будут ходить по кругу и не дойдут до получателя. "
+                f"Сначала отключите пересылку на промежуточных ящиках."
+            )
+        if current in visited:
+            continue
+        visited.add(current)
+        pending.extend(_read_forwarding_targets(conn, current))
+
+
 def add_forwarding(username: str, goto: str) -> None:
     username = username.lower()
     goto = goto.lower().strip()
@@ -372,6 +392,7 @@ def add_forwarding(username: str, goto: str) -> None:
         targets = _read_forwarding_targets(conn, username)
         if goto in targets:
             raise ValueError(f"Пересылка на {goto} уже настроена")
+        _check_forward_loop(conn, username, goto)
         targets.append(goto)
         _write_forwarding_targets(conn, username, targets)
 

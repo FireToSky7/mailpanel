@@ -7,11 +7,11 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.auth import PanelUser, Role, client_ip, get_current_user, require_permission, write_audit
 from app.config import get_config, role_has_permission
-from app.services import amavis_policy, iredapd, mail_ops
+from app.services import amavis_policy, iredapd, log_reader, mail_ops
 from app.services.amavis_policy import AmavisPolicyError
 from app.services.iredapd import IredapdError
+from app.services import postfix_diagnostics, postfix_queue, quarantine_ops
 from app.services.postfix_queue import PostfixQueueError
-from app.services import postfix_queue, quarantine_ops
 from app.services.quarantine_ops import QuarantineError
 from app.validators import normalize_email, validate_mailbox_password
 
@@ -527,6 +527,11 @@ def delete_quarantine_msg(
         raise HTTPException(400, str(exc)) from exc
 
 
+@router.get("/queue/diagnostics", dependencies=[Depends(require_permission("queue.read"))])
+def get_queue_diagnostics():
+    return postfix_diagnostics.mail_delivery_diagnostics()
+
+
 @router.get("/queue", dependencies=[Depends(require_permission("queue.read"))])
 def get_queue(
     status: str | None = None,
@@ -658,7 +663,7 @@ def logs_live(log_type: str, lines: int = 200):
     }
     if log_type not in mapping:
         raise HTTPException(404, "Unknown log type")
-    return {"lines": mail_ops.tail_log_file(mapping[log_type], lines)}
+    return log_reader.tail_live_log(log_type, mapping[log_type], lines)
 
 
 @router.get("/audit", dependencies=[Depends(require_permission("logs.read"))])

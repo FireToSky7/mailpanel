@@ -1,7 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { errorMessage } from '../errors'
 import { notify } from '../notify'
+
+const LIVE_TYPES: { id: string; label: string }[] = [
+  { id: 'mail', label: 'Почта' },
+  { id: 'dovecot', label: 'Dovecot' },
+  { id: 'iredapd', label: 'iRedAPD' },
+  { id: 'system', label: 'Система' },
+]
 
 export default function LogsPage() {
   const [items, setItems] = useState<any[]>([])
@@ -9,8 +16,12 @@ export default function LogsPage() {
   const [q, setQ] = useState('')
   const [queueId, setQueueId] = useState('')
   const [live, setLive] = useState('')
+  const [liveSource, setLiveSource] = useState('')
+  const [liveType, setLiveType] = useState<string | null>(null)
+  const [liveAuto, setLiveAuto] = useState(false)
   const [trace, setTrace] = useState<any[]>([])
   const [audit, setAudit] = useState<any[]>([])
+  const logBoxRef = useRef<HTMLPreElement>(null)
 
   async function search() {
     try {
@@ -25,10 +36,15 @@ export default function LogsPage() {
     }
   }
 
-  async function loadLive(type: string) {
+  async function loadLive(type: string, scrollToEnd = true) {
     try {
-      const res: any = await api.logsLive(type)
+      const res = await api.logsLive(type)
       setLive(res.lines.join('\n'))
+      setLiveSource(res.source_label)
+      setLiveType(type)
+      if (scrollToEnd && logBoxRef.current) {
+        logBoxRef.current.scrollTop = logBoxRef.current.scrollHeight
+      }
     } catch (e) {
       notify.error(errorMessage(e))
     }
@@ -39,11 +55,20 @@ export default function LogsPage() {
     api.audit().then(setAudit).catch((e) => notify.error(errorMessage(e)))
   }, [])
 
+  useEffect(() => {
+    if (!liveAuto || !liveType) return undefined
+    const timer = window.setInterval(() => {
+      loadLive(liveType, true).catch((e) => notify.error(errorMessage(e)))
+    }, 3000)
+    return () => window.clearInterval(timer)
+  }, [liveAuto, liveType])
+
   return (
     <div>
       <div className="topbar"><h2>Логи</h2></div>
       <div className="card">
         <h3>Поиск по индексу</h3>
+        <p className="muted">Индекс собирается из файлов логов. Если /var/log/maillog не обновляется, используйте «Живой лог» ниже.</p>
         <div className="form-row">
           <input placeholder="Текст" value={q} onChange={(e) => setQ(e.target.value)} />
           <input placeholder="Queue-ID" value={queueId} onChange={(e) => setQueueId(e.target.value)} />
@@ -72,12 +97,29 @@ export default function LogsPage() {
       </div>
       <div className="card">
         <h3>Живой лог</h3>
+        <p className="muted">
+          Для почты используется journalctl (postfix, amavisd), если файл maillog устарел.
+          {liveSource && <> Источник: <strong>{liveSource}</strong>.</>}
+        </p>
         <div className="form-row">
-          {['mail', 'iredapd', 'dovecot', 'system'].map((t) => (
-            <button key={t} className="secondary" onClick={() => loadLive(t)}>{t}</button>
+          {LIVE_TYPES.map((t) => (
+            <button
+              key={t.id}
+              className={liveType === t.id ? '' : 'secondary'}
+              onClick={() => loadLive(t.id)}
+            >
+              {t.label}
+            </button>
           ))}
+          <button
+            className={liveAuto ? '' : 'secondary'}
+            onClick={() => setLiveAuto((value) => !value)}
+            disabled={!liveType}
+          >
+            {liveAuto ? 'Пауза' : 'Автообновление (3 с)'}
+          </button>
         </div>
-        <pre className="log-box">{live}</pre>
+        <pre ref={logBoxRef} className="log-box" style={{ maxHeight: 420 }}>{live || 'Выберите тип лога'}</pre>
       </div>
       <div className="card">
         <h3>Аудит действий в панели</h3>

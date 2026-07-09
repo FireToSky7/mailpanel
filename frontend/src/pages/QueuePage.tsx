@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, getUser, type QueueItem } from '../api'
+import { api, getUser, type QueueDiagnosticIssue, type QueueItem } from '../api'
 import { errorMessage } from '../errors'
 import { notify } from '../notify'
 
@@ -50,11 +50,19 @@ export default function QueuePage() {
   const [sender, setSender] = useState('')
   const [recipient, setRecipient] = useState('')
   const [headers, setHeaders] = useState<string | null>(null)
+  const [diagnostics, setDiagnostics] = useState<QueueDiagnosticIssue[]>([])
+  const [hints, setHints] = useState<string[]>([])
   const canWrite = ['superadmin', 'admin'].includes(getUser()?.role || '')
 
   async function load() {
     try {
-      setData(await api.queue(status || undefined, sender || undefined, recipient || undefined))
+      const [queue, diag] = await Promise.all([
+        api.queue(status || undefined, sender || undefined, recipient || undefined),
+        api.queueDiagnostics(),
+      ])
+      setData(queue)
+      setDiagnostics(diag.issues)
+      setHints(diag.hints)
     } catch (e) {
       notify.error(errorMessage(e))
     }
@@ -91,9 +99,25 @@ export default function QueuePage() {
       <div className="card">
         <p className="muted">
           Письма, ожидающие доставки или повторной отправки. Удаление безвозвратно.
-          Внутренняя почта обычно проходит через Amavis — если письма зависают в статусе «активное»,
-          проверьте службу amavisd на вкладке «Службы». Для отложенных смотрите столбец «Причина».
         </p>
+        {diagnostics.length > 0 && (
+          <div style={{ marginBottom: 16 }}>
+            {diagnostics.map((issue) => (
+              <div
+                key={`${issue.level}:${issue.title}`}
+                className={`card ${issue.level === 'error' ? 'error' : 'info'}`}
+                style={{ marginBottom: 8, padding: '12px 16px' }}
+              >
+                <strong>{issue.title}</strong>
+                <p className="prewrap" style={{ margin: '8px 0' }}>{issue.message}</p>
+                <code style={{ display: 'block', whiteSpace: 'pre-wrap' }}>{issue.fix}</code>
+              </div>
+            ))}
+          </div>
+        )}
+        {hints.map((hint) => (
+          <p key={hint} className="muted">{hint}</p>
+        ))}
         <div className="grid">
           <div className="stat"><div className="label">Всего</div><div className="value">{data.total}</div></div>
           <div className="stat"><div className="label">Активные</div><div className="value">{data.active}</div></div>

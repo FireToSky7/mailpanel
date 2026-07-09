@@ -169,6 +169,19 @@ export type QueueList = {
   items: QueueItem[]
 }
 
+export type QueueDiagnosticIssue = {
+  level: 'error' | 'warning'
+  title: string
+  message: string
+  fix: string
+}
+
+export type QueueDiagnostics = {
+  ok: boolean
+  issues: QueueDiagnosticIssue[]
+  hints: string[]
+}
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
 }
@@ -306,6 +319,7 @@ export const api = {
     const query = params.toString()
     return request<QueueList>(`/api/queue${query ? `?${query}` : ''}`)
   },
+  queueDiagnostics: () => request<QueueDiagnostics>('/api/queue/diagnostics'),
   queueHeaders: (queueId: string) => request<{ queue_id: string; headers: string }>(`/api/queue/${encodeURIComponent(queueId)}`),
   deleteQueueItem: (queueId: string) =>
     request<{ ok: boolean }>(`/api/queue/${encodeURIComponent(queueId)}`, { method: 'DELETE' }),
@@ -318,7 +332,10 @@ export const api = {
   flushQueue: () => request<{ ok: boolean }>('/api/queue/flush', { method: 'POST', body: JSON.stringify({ confirm: 'FLUSH_ALL' }) }),
   logsSearch: (params: URLSearchParams) => request<LogsSearchResult>(`/api/logs/search?${params}`),
   logsTrace: (queueId: string) => request<LogEntry[]>(`/api/logs/trace/${queueId}`),
-  logsLive: (type: string) => request<{ lines: string[] }>(`/api/logs/live/${type}`),
+  logsLive: (type: string, lines = 200) =>
+    request<{ lines: string[]; source: string; source_label: string }>(
+      `/api/logs/live/${type}?lines=${lines}`,
+    ),
   services: () => request<ServiceStatus[]>('/api/services'),
   restartService: (name: string) => request<ServiceStatus>(`/api/services/${name}/restart`, { method: 'POST' }),
   fail2ban: () => request<Fail2banJail[]>('/api/fail2ban'),
