@@ -76,7 +76,7 @@ export default function AliasesPage() {
       await api.setMailboxForwarding(fwdMailbox, target)
       setFwdTarget('')
       notify.success(`Добавлена пересылка: ${fwdMailbox} → ${target}`)
-      await load()
+      setForwardings(await api.forwardings())
     } catch (e) {
       notify.error(errorMessage(e))
     }
@@ -85,9 +85,9 @@ export default function AliasesPage() {
   async function removeForwarding(address: string, goto: string) {
     if (!confirm(`Отключить пересылку ${address} → ${goto}?`)) return
     try {
-      await api.clearMailboxForwarding(address, goto)
+      const res = await api.removeMailboxForwarding(address, goto)
+      setForwardings(res.items)
       notify.success('Пересылка отключена')
-      await load()
     } catch (e) {
       notify.error(errorMessage(e))
     }

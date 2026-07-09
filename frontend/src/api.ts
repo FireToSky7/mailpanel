@@ -249,6 +249,11 @@ export const api = {
     )
   },
   forwardings: () => request<ForwardingEntry[]>('/api/forwardings'),
+  removeMailboxForwarding: (address: string, goto: string) =>
+    request<{ ok: boolean; items: ForwardingEntry[] }>('/api/forwardings/remove', {
+      method: 'POST',
+      body: JSON.stringify({ address, goto }),
+    }),
   aliases: () => request<Alias[]>('/api/aliases'),
   createAlias: (body: object) => request<{ ok: boolean }>('/api/aliases', { method: 'POST', body: JSON.stringify(body) }),
   deleteAlias: (address: string) =>

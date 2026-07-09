@@ -71,6 +71,11 @@ class ForwardingUpdate(BaseModel):
     goto: str
 
 
+class ForwardingRemove(BaseModel):
+    address: str
+    goto: str
+
+
 class WblistRequest(BaseModel):
     entries: list[str] = Field(min_length=1)
     account: str | None = None
@@ -238,6 +243,25 @@ def get_aliases():
 @router.get("/forwardings", dependencies=[Depends(require_permission("mail.read"))])
 def get_forwardings():
     return mail_ops.list_mailbox_forwardings(get_config().panel.mail_domain)
+
+
+@router.post("/forwardings/remove", dependencies=[Depends(require_permission("mail.write"))])
+def remove_forwarding_entry(
+    payload: ForwardingRemove,
+    request: Request,
+    user: PanelUser = Depends(require_permission("mail.write")),
+):
+    address = payload.address.lower()
+    try:
+        goto = normalize_email(payload.goto, "Пересылка на")
+        if not mail_ops.mailbox_exists(address):
+            raise ValueError(f"Ящик не найден: {address}")
+        mail_ops.remove_forwarding(address, goto)
+        _audit(user, request, "forwarding_remove", "mailbox", f"{address} -> {goto}")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    items = mail_ops.list_mailbox_forwardings(get_config().panel.mail_domain)
+    return {"ok": True, "items": items}
 
 
 @router.post("/aliases", dependencies=[Depends(require_permission("mail.write"))])

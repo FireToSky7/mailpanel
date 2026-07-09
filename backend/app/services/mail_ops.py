@@ -275,36 +275,87 @@ def _ensure_self_forwarding(conn, username: str) -> None:
         )
 
 
-def _mailbox_forward_targets(conn, username: str) -> list[str]:
+def _forward_value(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace").strip().lower()
+    return str(value).strip().lower()
+
+
+def _read_forwarding_targets(conn, username: str) -> list[str]:
+    username = username.lower()
     rows = fetch_all(
         conn,
-        "SELECT DISTINCT forwarding FROM forwardings "
-        "WHERE address = %s AND LOWER(forwarding) != LOWER(%s) "
-        "ORDER BY forwarding",
-        (username, username),
+        "SELECT forwarding FROM forwardings WHERE LOWER(address) = LOWER(%s)",
+        (username,),
     )
-    return [row["forwarding"] for row in rows]
+    targets: set[str] = set()
+    for row in rows:
+        fwd = _forward_value(row["forwarding"])
+        if fwd and fwd != username:
+            targets.add(fwd)
+    return sorted(targets)
+
+
+def _write_forwarding_targets(conn, username: str, targets: list[str]) -> None:
+    username = username.lower()
+    clean_targets = sorted(
+        {
+            target.lower().strip()
+            for target in targets
+            if target.strip() and target.lower().strip() != username
+        }
+    )
+    domain = _dest_domain(username)
+    execute(conn, "DELETE FROM forwardings WHERE LOWER(address) = LOWER(%s)", (username,))
+    execute(
+        conn,
+        "INSERT INTO forwardings (address, forwarding, domain, dest_domain, is_forwarding, active) "
+        "VALUES (%s, %s, %s, %s, 1, 1)",
+        (username, username, domain, domain),
+    )
+    for target in clean_targets:
+        execute(
+            conn,
+            "INSERT INTO forwardings (address, forwarding, domain, dest_domain, is_forwarding, active) "
+            "VALUES (%s, %s, %s, %s, 1, 1)",
+            (username, target, domain, _dest_domain(target)),
+        )
+
+
+def _mailbox_forward_targets(conn, username: str) -> list[str]:
+    return _read_forwarding_targets(conn, username)
 
 
 def list_mailbox_forwardings(domain: str | None = None) -> list[dict[str, Any]]:
     query = (
         "SELECT m.username AS address, f.forwarding AS goto "
         "FROM mailbox m "
-        "JOIN forwardings f ON f.address = m.username AND LOWER(f.forwarding) != LOWER(m.username) "
+        "JOIN forwardings f ON LOWER(f.address) = LOWER(m.username) "
+        "AND LOWER(TRIM(f.forwarding)) != LOWER(TRIM(m.username)) "
     )
     params: tuple[Any, ...] = ()
     if domain:
-        query += " WHERE m.domain = %s"
+        query += " WHERE LOWER(m.domain) = LOWER(%s)"
         params = (domain.lower(),)
     query += " ORDER BY m.username, f.forwarding"
     with vmail_conn() as conn:
-        return fetch_all(conn, query, params)
+        rows = fetch_all(conn, query, params)
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        address = row["address"]
+        goto = row["goto"]
+        if isinstance(address, bytes):
+            address = address.decode("utf-8", errors="replace")
+        if isinstance(goto, bytes):
+            goto = goto.decode("utf-8", errors="replace")
+        result.append({"address": str(address).strip(), "goto": str(goto).strip()})
+    return result
 
 
 def get_forwarding(username: str) -> str | None:
     username = username.lower()
     with vmail_conn() as conn:
-        targets = _mailbox_forward_targets(conn, username)
+        targets = _read_forwarding_targets(conn, username)
     if not targets:
         return None
     return ", ".join(targets)
@@ -312,57 +363,17 @@ def get_forwarding(username: str) -> str | None:
 
 def add_forwarding(username: str, goto: str) -> None:
     username = username.lower()
-    goto = goto.lower()
+    goto = goto.lower().strip()
     if username == goto:
         raise ValueError("Нельзя пересылать ящик сам на себя")
-    domain = _dest_domain(username)
-    dest_domain = _dest_domain(goto)
     with vmail_conn() as conn:
         if not fetch_one(conn, "SELECT username FROM mailbox WHERE username = %s", (username,)):
             raise ValueError(f"Ящик не найден: {username}")
-
-        rows = fetch_all(
-            conn,
-            "SELECT forwarding FROM forwardings WHERE address = %s",
-            (username,),
-        )
-        existing_targets = {
-            row["forwarding"].lower()
-            for row in rows
-            if row["forwarding"].lower() != username
-        }
-        has_self = any(row["forwarding"].lower() == username for row in rows)
-
-        if goto in existing_targets:
+        targets = _read_forwarding_targets(conn, username)
+        if goto in targets:
             raise ValueError(f"Пересылка на {goto} уже настроена")
-
-        # iRedMail иногда хранит пересылку в единственной строке (ящик → получатель).
-        if len(rows) == 1 and not has_self:
-            old_target = rows[0]["forwarding"].lower()
-            execute(conn, "DELETE FROM forwardings WHERE address = %s", (username,))
-            execute(
-                conn,
-                "INSERT INTO forwardings (address, forwarding, domain, dest_domain, is_forwarding, active) "
-                "VALUES (%s, %s, %s, %s, 1, 1)",
-                (username, username, domain, domain),
-            )
-            for target in sorted({old_target, goto}):
-                target_domain = _dest_domain(target)
-                execute(
-                    conn,
-                    "INSERT INTO forwardings (address, forwarding, domain, dest_domain, is_forwarding, active) "
-                    "VALUES (%s, %s, %s, %s, 1, 1)",
-                    (username, target, domain, target_domain),
-                )
-            return
-
-        _ensure_self_forwarding(conn, username)
-        execute(
-            conn,
-            "INSERT INTO forwardings (address, forwarding, domain, dest_domain, is_forwarding, active) "
-            "VALUES (%s, %s, %s, %s, 1, 1)",
-            (username, goto, domain, dest_domain),
-        )
+        targets.append(goto)
+        _write_forwarding_targets(conn, username, targets)
 
 
 def set_forwarding(username: str, goto: str) -> None:
@@ -372,25 +383,18 @@ def set_forwarding(username: str, goto: str) -> None:
 
 def remove_forwarding(username: str, goto: str) -> None:
     username = username.lower()
-    goto = goto.lower()
+    goto = goto.lower().strip()
     with vmail_conn() as conn:
-        execute(
-            conn,
-            "DELETE FROM forwardings WHERE address = %s AND LOWER(forwarding) = LOWER(%s)",
-            (username, goto),
-        )
-        _ensure_self_forwarding(conn, username)
+        targets = _read_forwarding_targets(conn, username)
+        if goto not in targets:
+            return
+        _write_forwarding_targets(conn, username, [t for t in targets if t != goto])
 
 
 def clear_forwarding(username: str) -> None:
     username = username.lower()
     with vmail_conn() as conn:
-        execute(
-            conn,
-            "DELETE FROM forwardings WHERE address = %s AND LOWER(forwarding) != LOWER(%s)",
-            (username, username),
-        )
-        _ensure_self_forwarding(conn, username)
+        _write_forwarding_targets(conn, username, [])
 
 
 def dashboard_stats() -> dict[str, Any]:
