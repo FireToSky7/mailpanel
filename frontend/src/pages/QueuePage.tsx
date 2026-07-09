@@ -113,7 +113,7 @@ export default function QueuePage() {
               <th>Кому</th>
               <th>Размер</th>
               <th>Причина</th>
-              <th className="col-actions"></th>
+              <th className="actions">Действия</th>
             </tr>
           </thead>
           <tbody>

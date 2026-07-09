@@ -111,7 +111,7 @@ export default function QuarantinePage() {
               <th>Тема</th>
               <th>Тип</th>
               <th>Размер</th>
-              <th className="col-actions"></th>
+              <th className="actions">Действия</th>
             </tr>
           </thead>
           <tbody>

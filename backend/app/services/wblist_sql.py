@@ -36,9 +36,18 @@ def normalize_wblist_account(account: str | None) -> str:
     if not account or not account.strip():
         return "@."
     account = account.strip().lower()
-    if "@" in account:
+    if account == "@.":
+        return "@."
+    if account.startswith("@."):
         return account
-    return f"@.{account}"
+    if account.startswith("@"):
+        return account
+    return f"@{account}"
+
+
+def _user_ids_for_account(conn, account: str) -> list[int]:
+    rows = fetch_all(conn, "SELECT id FROM users WHERE email = %s ORDER BY id", (account,))
+    return [int(row["id"]) for row in rows]
 
 
 def _decode_email(value: Any) -> str:
@@ -48,9 +57,15 @@ def _decode_email(value: Any) -> str:
 
 
 def _ensure_user(conn, account: str) -> int:
-    row = fetch_one(conn, "SELECT id FROM users WHERE email = %s LIMIT 1", (account,))
-    if row:
-        return int(row["id"])
+    user_ids = _user_ids_for_account(conn, account)
+    if len(user_ids) > 1:
+        primary_id = user_ids[0]
+        for other_id in user_ids[1:]:
+            execute(conn, "UPDATE wblist SET rid = %s WHERE rid = %s", (primary_id, other_id))
+            execute(conn, "DELETE FROM users WHERE id = %s", (other_id,))
+        return primary_id
+    if user_ids:
+        return user_ids[0]
     addr_type = classify_address(account)
     if not addr_type:
         raise ValueError(f"Некорректный аккаунт списка: {account}")
@@ -60,10 +75,10 @@ def _ensure_user(conn, account: str) -> int:
         "INSERT INTO users (policy_id, email, priority) VALUES (0, %s, %s)",
         (account, priority),
     )
-    row = fetch_one(conn, "SELECT id FROM users WHERE email = %s LIMIT 1", (account,))
-    if not row:
+    user_ids = _user_ids_for_account(conn, account)
+    if not user_ids:
         raise ValueError(f"Не удалось создать аккаунт списка: {account}")
-    return int(row["id"])
+    return user_ids[0]
 
 
 def _ensure_mailaddr(conn, address: str) -> int:
@@ -89,15 +104,18 @@ def list_wblist(list_type: str, account: str | None = None) -> list[str]:
     wb_flag = "W" if list_type == "whitelist" else "B"
     wb_account = normalize_wblist_account(account)
     with amavisd_conn() as conn:
-        user_id = _ensure_user(conn, wb_account)
+        user_ids = _user_ids_for_account(conn, wb_account)
+        if not user_ids:
+            return []
+        placeholders = ", ".join(["%s"] * len(user_ids))
         rows = fetch_all(
             conn,
-            "SELECT m.email "
-            "FROM wblist w "
-            "JOIN mailaddr m ON w.sid = m.id "
-            "WHERE w.rid = %s AND w.wb = %s "
-            "ORDER BY m.email",
-            (user_id, wb_flag),
+            f"SELECT DISTINCT m.email "
+            f"FROM wblist w "
+            f"JOIN mailaddr m ON w.sid = m.id "
+            f"WHERE w.rid IN ({placeholders}) AND w.wb = %s "
+            f"ORDER BY m.email",
+            (*user_ids, wb_flag),
         )
     return [_decode_email(row["email"]) for row in rows]
 
@@ -115,7 +133,11 @@ def add_wblist(list_type: str, senders: list[str], account: str | None = None) -
             if not classify_address(sender):
                 raise ValueError(f"Некорректный адрес: {sender}")
             sender_id = _ensure_mailaddr(conn, sender)
-            execute(conn, "DELETE FROM wblist WHERE rid = %s AND sid = %s", (user_id, sender_id))
+            execute(
+                conn,
+                "DELETE FROM wblist WHERE rid = %s AND sid = %s AND wb = %s",
+                (user_id, sender_id, wb_flag),
+            )
             execute(
                 conn,
                 "INSERT INTO wblist (rid, sid, wb) VALUES (%s, %s, %s)",
