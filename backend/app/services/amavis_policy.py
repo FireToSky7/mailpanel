@@ -178,8 +178,15 @@ if ($mailpanel_scan_internal) {{
 """
 
 
+def _include_line(include_path: Path) -> str:
+    # amavis 2.14 on iRedMail does not provide include_config_file(); use Perl do.
+    return f"do '{include_path.as_posix()}';"
+
+
 def _ensure_include_line(content: str, include_path: Path) -> str:
-    include_line = f"include_config_file('{include_path.as_posix()}');"
+    include_line = _include_line(include_path)
+    legacy_line = f"include_config_file('{include_path.as_posix()}');"
+    content = content.replace(legacy_line, include_line)
     if include_line in content:
         return content
     marker = f"{MARKER_INCLUDE}\n{include_line}\n"
