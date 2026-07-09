@@ -100,6 +100,13 @@ export default function RulesPage() {
               )}
             </div>
             <div>
+              Хук Amavis: {diagnostics.amavis_hook_loaded ? (
+                <span className="badge">подключён</span>
+              ) : (
+                <span className="badge down">не подключён</span>
+              )}
+            </div>
+            <div>
               Правила в local.cf: {diagnostics.rules_in_local_cf ? 'да' : 'нет'}
               {diagnostics.local_cf_exists ? ` (${diagnostics.local_cf})` : ''}
             </div>

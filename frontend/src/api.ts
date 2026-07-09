@@ -99,6 +99,9 @@ export type ContentFiltersData = {
     local_cf: string
     local_cf_exists: boolean
     rules_in_local_cf: boolean
+    amavis_custom_file: string
+    amavis_custom_exists: boolean
+    amavis_hook_loaded: boolean
     active_rules: number
     scan_internal_mail: boolean
   }

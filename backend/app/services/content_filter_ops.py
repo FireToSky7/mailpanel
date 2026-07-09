@@ -184,6 +184,13 @@ our @MAILPANEL_BODY_PATTERNS = (
 sub new {{
   my ($class, $conn, $msginfo) = @_;
   return undef unless @MAILPANEL_SUBJECT_PATTERNS || @MAILPANEL_BODY_PATTERNS;
+  do_log(
+    1,
+    "MAILPANEL: hook active (%d subject, %d body patterns) for <%s>",
+    scalar @MAILPANEL_SUBJECT_PATTERNS,
+    scalar @MAILPANEL_BODY_PATTERNS,
+    $msginfo->sender || 'unknown'
+  );
   bless {{}}, $class;
 }}
 
@@ -347,6 +354,36 @@ def _ensure_required_score(content: str) -> str:
     return content.rstrip() + "\n\nrequired_score 5.0\n"
 
 
+def _count_patterns_in_custom_file(path: Path) -> tuple[int, int]:
+    if not path.is_file():
+        return 0, 0
+    text = path.read_text(encoding="utf-8", errors="replace")
+    subject_block = re.search(
+        r"@MAILPANEL_SUBJECT_PATTERNS\s*=\s*\((.*?)\);",
+        text,
+        flags=re.DOTALL,
+    )
+    body_block = re.search(
+        r"@MAILPANEL_BODY_PATTERNS\s*=\s*\((.*?)\);",
+        text,
+        flags=re.DOTALL,
+    )
+    subject_count = len(re.findall(r"qr/", subject_block.group(1))) if subject_block else 0
+    body_count = len(re.findall(r"qr/", body_block.group(1))) if body_block else 0
+    return subject_count, body_count
+
+
+def _amavisd_active() -> bool:
+    result = subprocess.run(
+        ["systemctl", "is-active", "amavisd"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    return result.stdout.strip() == "active"
+
+
 def _restart_amavisd() -> None:
     subprocess.run(["systemctl", "restart", "amavisd"], check=False)
 
@@ -398,6 +435,7 @@ def _diagnostics(filters: list[dict[str, Any]]) -> dict[str, Any]:
         scan_internal_mail = bool(amavis_policy.read_mail_policy().get("scan_internal_mail"))
     except Exception:
         scan_internal_mail = False
+    subject_patterns, body_patterns = _count_patterns_in_custom_file(custom_path)
     return {
         "local_cf": str(local_cf),
         "local_cf_exists": local_cf.is_file(),
@@ -405,6 +443,9 @@ def _diagnostics(filters: list[dict[str, Any]]) -> dict[str, Any]:
         "amavis_custom_file": str(custom_path),
         "amavis_custom_exists": custom_path.is_file(),
         "amavis_hook_loaded": amavis_hook_loaded,
+        "amavisd_active": _amavisd_active(),
+        "hook_subject_patterns": subject_patterns,
+        "hook_body_patterns": body_patterns,
         "active_rules": len(_enabled_rules(filters)),
         "scan_internal_mail": scan_internal_mail,
     }
