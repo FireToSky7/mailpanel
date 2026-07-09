@@ -93,12 +93,15 @@ export type LogEntry = {
   mail_to: string | null
   status: string | null
   spam_score: number | null
+  outcome?: string | null
   message: string
 }
 
 export type LogsSearchResult = {
   total: number
   items: LogEntry[]
+  source?: string
+  source_label?: string
 }
 
 export type DashboardData = {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../api'
+import { api, type LogEntry } from '../api'
 import { errorMessage } from '../errors'
 import { notify } from '../notify'
 
@@ -10,20 +10,28 @@ const LIVE_TYPES: { id: string; label: string }[] = [
   { id: 'system', label: 'Система' },
 ]
 
+function defaultDateFrom(): string {
+  const date = new Date(Date.now() - 24 * 60 * 60 * 1000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 export default function LogsPage() {
-  const [items, setItems] = useState<any[]>([])
+  const [items, setItems] = useState<LogEntry[]>([])
   const [total, setTotal] = useState(0)
+  const [sourceLabel, setSourceLabel] = useState('')
   const [q, setQ] = useState('')
   const [queueId, setQueueId] = useState('')
   const [mailFrom, setMailFrom] = useState('')
   const [mailTo, setMailTo] = useState('')
-  const [dateFrom, setDateFrom] = useState('')
+  const [dateFrom, setDateFrom] = useState(defaultDateFrom)
   const [dateTo, setDateTo] = useState('')
   const [live, setLive] = useState('')
   const [liveSource, setLiveSource] = useState('')
   const [liveType, setLiveType] = useState<string | null>(null)
   const [liveAuto, setLiveAuto] = useState(false)
-  const [trace, setTrace] = useState<any[]>([])
+  const [trace, setTrace] = useState<LogEntry[]>([])
+  const [traceId, setTraceId] = useState('')
   const [audit, setAudit] = useState<any[]>([])
   const logBoxRef = useRef<HTMLPreElement>(null)
 
@@ -36,9 +44,23 @@ export default function LogsPage() {
       if (mailTo.trim()) params.set('mail_to', mailTo.trim())
       if (dateFrom) params.set('date_from', dateFrom)
       if (dateTo) params.set('date_to', dateTo)
-      const res: any = await api.logsSearch(params)
+      const res = await api.logsSearch(params)
       setItems(res.items)
       setTotal(res.total)
+      setSourceLabel(res.source_label || '')
+      setTrace([])
+      setTraceId('')
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
+  }
+
+  async function showTrace(id: string) {
+    if (!id) return
+    try {
+      setTraceId(id)
+      setQueueId(id)
+      setTrace(await api.logsTrace(id))
     } catch (e) {
       notify.error(errorMessage(e))
     }
@@ -59,7 +81,6 @@ export default function LogsPage() {
   }
 
   useEffect(() => {
-    search().catch((e) => notify.error(errorMessage(e)))
     api.audit().then(setAudit).catch((e) => notify.error(errorMessage(e)))
   }, [])
 
@@ -74,9 +95,14 @@ export default function LogsPage() {
   return (
     <div>
       <div className="topbar"><h2>Логи</h2></div>
-      <div className="card">
-        <h3>Поиск по индексу</h3>
-        <p className="muted">Все указанные поля работают вместе (логическое «И»). Индекс собирается из файлов логов — для свежих записей используйте «Живой лог» ниже.</p>
+      <div className="card table-scroll">
+        <h3>Поиск по почтовым логам</h3>
+        <p className="muted">
+          Поиск по journalctl (postfix, amavisd, dovecot, iRedAPD, rspamd). Укажите отправителя и/или получателя,
+          задайте период и нажмите «Найти». Колонка «Результат» показывает итог: доставка, очередь, карантин, отклонение и т.д.
+          Клик по Queue-ID — полная история письма.
+          {sourceLabel && <> Источник: <strong>{sourceLabel}</strong>.</>}
+        </p>
         <div className="form-row">
           <input placeholder="Текст в сообщении" value={q} onChange={(e) => setQ(e.target.value)} />
           <input placeholder="Queue-ID" value={queueId} onChange={(e) => setQueueId(e.target.value)} />
@@ -100,36 +126,78 @@ export default function LogsPage() {
             setQueueId('')
             setMailFrom('')
             setMailTo('')
-            setDateFrom('')
+            setDateFrom(defaultDateFrom())
             setDateTo('')
             setTrace([])
+            setTraceId('')
+            setItems([])
+            setTotal(0)
           }}>Сбросить</button>
-          <button className="secondary" onClick={async () => {
-            if (!queueId) return
-            try {
-              setTrace(await api.logsTrace(queueId))
-            } catch (e) {
-              notify.error(errorMessage(e))
-            }
-          }}>Трейс</button>
         </div>
         <p className="muted">Найдено: {total}</p>
-        <div className="log-box" style={{ maxHeight: 300 }}>
-          {items.map((row) => (
-            <div key={row.id}>[{row.logged_at}] {row.service} {row.queue_id || ''} {row.mail_from || ''} → {row.mail_to || ''} {row.message}</div>
-          ))}
-        </div>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Время</th>
+              <th>Служба</th>
+              <th>От</th>
+              <th>Кому</th>
+              <th>Queue-ID</th>
+              <th>Результат</th>
+              <th>Сообщение</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.length === 0 && (
+              <tr><td colSpan={7} className="muted">Укажите отправителя, получателя или Queue-ID и нажмите «Найти»</td></tr>
+            )}
+            {items.map((row) => (
+              <tr key={row.id}>
+                <td>{row.logged_at}</td>
+                <td>{row.service}</td>
+                <td>{row.mail_from || '—'}</td>
+                <td>{row.mail_to || '—'}</td>
+                <td>
+                  {row.queue_id ? (
+                    <button className="secondary" onClick={() => showTrace(row.queue_id!)}>{row.queue_id}</button>
+                  ) : '—'}
+                </td>
+                <td>{row.outcome || row.status || '—'}</td>
+                <td title={row.message}>{row.message}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
         {trace.length > 0 && (
-          <div className="card">
-            <h4>Трейс {queueId}</h4>
-            <div className="log-box">{trace.map((r) => `[${r.logged_at}] ${r.message}`).join('\n')}</div>
+          <div style={{ marginTop: 16 }}>
+            <h4>История письма {traceId}</h4>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Время</th>
+                  <th>Служба</th>
+                  <th>Результат</th>
+                  <th>Сообщение</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trace.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.logged_at}</td>
+                    <td>{row.service}</td>
+                    <td>{row.outcome || row.status || '—'}</td>
+                    <td title={row.message}>{row.message}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
       <div className="card">
         <h3>Живой лог</h3>
         <p className="muted">
-          Для почты используется journalctl (postfix, amavisd), если файл maillog устарел.
+          Поток последних записей в реальном времени.
           {liveSource && <> Источник: <strong>{liveSource}</strong>.</>}
         </p>
         <div className="form-row">

@@ -10,7 +10,7 @@ from app.config import get_config, role_has_permission
 from app.services import amavis_policy, iredapd, log_reader, mail_ops
 from app.services.amavis_policy import AmavisPolicyError
 from app.services.iredapd import IredapdError
-from app.services import postfix_diagnostics, postfix_queue, quarantine_ops
+from app.services import mail_journal_search, postfix_diagnostics, postfix_queue, quarantine_ops
 from app.services.postfix_queue import PostfixQueueError
 from app.services.quarantine_ops import QuarantineError
 from app.validators import normalize_email, validate_mailbox_password
@@ -640,14 +640,28 @@ def logs_search(
     limit: int = 200,
     offset: int = 0,
 ):
-    return mail_ops.search_logs(
-        service, q, queue_id, mail_from, mail_to, date_from, date_to, limit, offset
-    )
+    try:
+        return mail_journal_search.search_mail_logs(
+            query=q,
+            queue_id=queue_id,
+            mail_from=mail_from,
+            mail_to=mail_to,
+            date_from=date_from,
+            date_to=date_to,
+            service=service,
+            limit=limit,
+            offset=offset,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/logs/trace/{queue_id}", dependencies=[Depends(require_permission("logs.read"))])
 def logs_trace(queue_id: str):
-    return mail_ops.trace_queue_id(queue_id)
+    try:
+        return mail_journal_search.trace_queue_id(queue_id)
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/logs/live/{log_type}", dependencies=[Depends(require_permission("logs.read"))])
