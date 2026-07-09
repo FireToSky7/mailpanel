@@ -19,6 +19,7 @@ export type Mailbox = {
   used_mb?: number
   bytes_used?: number
   messages?: number
+  forwarding_to?: string | null
 }
 
 export type Alias = {
@@ -229,6 +230,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ active }),
     }),
+  mailboxForwarding: (username: string) =>
+    request<ForwardingInfo>(`/api/mailboxes/${encodeURIComponent(username)}/forwarding`),
+  setMailboxForwarding: (username: string, goto: string) =>
+    request<{ ok: boolean }>(`/api/mailboxes/${encodeURIComponent(username)}/forwarding`, {
+      method: 'PUT',
+      body: JSON.stringify({ goto }),
+    }),
+  clearMailboxForwarding: (username: string) =>
+    request<{ ok: boolean }>(`/api/mailboxes/${encodeURIComponent(username)}/forwarding`, { method: 'DELETE' }),
   aliases: () => request<Alias[]>('/api/aliases'),
   createAlias: (body: object) => request<{ ok: boolean }>('/api/aliases', { method: 'POST', body: JSON.stringify(body) }),
   deleteAlias: (address: string) =>
@@ -306,10 +316,6 @@ export const api = {
     request<{ ok: boolean }>(`/api/panel-users/${id}/password`, { method: 'PUT', body: JSON.stringify({ password }) }),
   deletePanelUser: (id: number) => request<{ ok: boolean }>(`/api/panel-users/${id}`, { method: 'DELETE' }),
   audit: () => request<AuditEntry[]>('/api/audit'),
-  myForwarding: () => request<ForwardingInfo>('/api/portal/forwarding'),
-  setForwarding: (goto: string) =>
-    request<{ ok: boolean }>('/api/portal/forwarding', { method: 'PUT', body: JSON.stringify({ goto }) }),
-  clearForwarding: () => request<{ ok: boolean }>('/api/portal/forwarding', { method: 'DELETE' }),
 }
 
 export function canAccess(role: string, section: string): boolean {
@@ -318,12 +324,11 @@ export function canAccess(role: string, section: string): boolean {
     mailboxes: ['superadmin', 'admin', 'viewer'],
     aliases: ['superadmin', 'admin', 'viewer'],
     antispam: ['superadmin', 'admin', 'viewer'],
-    quarantine: ['superadmin', 'admin', 'viewer', 'user'],
+    quarantine: ['superadmin', 'admin', 'viewer'],
     queue: ['superadmin', 'admin'],
     logs: ['superadmin', 'admin', 'viewer'],
     services: ['superadmin', 'admin', 'viewer'],
     panelUsers: ['superadmin'],
-    portal: ['user'],
   }
   return (map[section] || []).includes(role)
 }

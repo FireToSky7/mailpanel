@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, getUser, type GreylistingData, type MailPolicyData } from '../api'
 import EntryList from '../components/EntryList'
 import { errorMessage } from '../errors'
+import { notify } from '../notify'
 
 function parseGreylistingTable(raw: string): { headers: string[]; rows: string[][] } | null {
   const lines = raw.trim().split('\n').filter((line) => line.trim())
@@ -30,113 +31,102 @@ export default function AntispamPage() {
   const [bannedEntry, setBannedEntry] = useState('')
   const [mailPolicy, setMailPolicy] = useState<MailPolicyData | null>(null)
   const [scanInternal, setScanInternal] = useState(false)
-  const [error, setError] = useState('')
-  const [info, setInfo] = useState('')
   const role = getUser()?.role
   const canWrite = role === 'superadmin' || role === 'admin'
-  const isUser = role === 'user'
 
   async function load() {
-    setError('')
     const errors: string[] = []
 
     try {
-      const wl = await api.wblist('whitelist', isUser ? undefined : account || undefined)
+      const wl = await api.wblist('whitelist', account || undefined)
       setWhitelist(wl.entries)
     } catch (e) {
       errors.push(`Белый список: ${errorMessage(e)}`)
       setWhitelist([])
     }
 
-    if (!isUser) {
-      try {
-        const bl = await api.wblist('blacklist', account || undefined)
-        setBlacklist(bl.entries)
-      } catch (e) {
-        errors.push(`Чёрный список: ${errorMessage(e)}`)
-        setBlacklist([])
-      }
-
-      try {
-        const spam = await api.spam()
-        setScore(spam.required_score)
-      } catch (e) {
-        errors.push(`SpamAssassin: ${errorMessage(e)}`)
-      }
-
-      try {
-        setGrey(await api.greylisting())
-      } catch (e) {
-        errors.push(`Greylisting: ${errorMessage(e)}`)
-        setGrey(null)
-      }
-
-      try {
-        const banned = await api.bannedExtensions()
-        setBannedExtensions(banned.extensions)
-      } catch (e) {
-        errors.push(`Запрещённые файлы: ${errorMessage(e)}`)
-        setBannedExtensions([])
-      }
-
-      try {
-        const policy = await api.mailPolicy()
-        setMailPolicy(policy)
-        setScanInternal(policy.scan_internal_mail)
-      } catch (e) {
-        errors.push(`Политика почты: ${errorMessage(e)}`)
-        setMailPolicy(null)
-      }
+    try {
+      const bl = await api.wblist('blacklist', account || undefined)
+      setBlacklist(bl.entries)
+    } catch (e) {
+      errors.push(`Чёрный список: ${errorMessage(e)}`)
+      setBlacklist([])
     }
 
-    if (errors.length) setError(errors.join('\n'))
+    try {
+      const spam = await api.spam()
+      setScore(spam.required_score)
+    } catch (e) {
+      errors.push(`SpamAssassin: ${errorMessage(e)}`)
+    }
+
+    try {
+      setGrey(await api.greylisting())
+    } catch (e) {
+      errors.push(`Greylisting: ${errorMessage(e)}`)
+      setGrey(null)
+    }
+
+    try {
+      const banned = await api.bannedExtensions()
+      setBannedExtensions(banned.extensions)
+    } catch (e) {
+      errors.push(`Запрещённые файлы: ${errorMessage(e)}`)
+      setBannedExtensions([])
+    }
+
+    try {
+      const policy = await api.mailPolicy()
+      setMailPolicy(policy)
+      setScanInternal(policy.scan_internal_mail)
+    } catch (e) {
+      errors.push(`Политика почты: ${errorMessage(e)}`)
+      setMailPolicy(null)
+    }
+
+    if (errors.length) notify.error(errors.join('\n'))
   }
 
   useEffect(() => { load() }, [])
 
   async function addToList(type: 'whitelist' | 'blacklist', entry: string, clear: () => void) {
-    setError('')
-    setInfo('')
     const value = entry.trim()
     if (!value) {
-      setError('Укажите запись для добавления')
+      notify.error('Укажите запись для добавления')
       return
     }
     try {
       await api.addWblist(type, [value], account || undefined)
       clear()
-      setInfo('Запись добавлена')
+      notify.success('Запись добавлена')
       await load()
     } catch (e) {
-      setError(errorMessage(e))
+      notify.error(errorMessage(e))
     }
   }
 
   async function removeFromList(type: 'whitelist' | 'blacklist', entry: string) {
-    setError('')
-    setInfo('')
     try {
       await api.deleteWblist(type, [entry], account || undefined)
+      notify.success('Запись удалена')
       await load()
     } catch (e) {
-      setError(errorMessage(e))
+      notify.error(errorMessage(e))
     }
   }
 
   async function saveScore() {
-    setError('')
-    setInfo('')
     const value = parseFloat(score)
     if (!Number.isFinite(value) || value < 0 || value > 20) {
-      setError('Порог спама: число от 0 до 20')
+      notify.error('Порог спама: число от 0 до 20')
       return
     }
     try {
       await api.updateSpam({ required_score: value })
-      setInfo('Порог SpamAssassin сохранён')
+      notify.success('Порог SpamAssassin сохранён')
       await load()
     } catch (e) {
-      setError(errorMessage(e))
+      notify.error(errorMessage(e))
     }
   }
 
@@ -149,58 +139,50 @@ export default function AntispamPage() {
   }
 
   async function addBannedExtensionAction() {
-    setError('')
-    setInfo('')
     try {
       const ext = normalizeExtension(bannedEntry)
       if (bannedExtensions.includes(ext)) {
-        setError('Такое расширение уже в списке')
+        notify.error('Такое расширение уже в списке')
         return
       }
       const next = [...bannedExtensions, ext].sort()
       await api.updateBannedExtensions(next)
       setBannedEntry('')
-      setInfo('Список запрещённых расширений сохранён, Amavis перезапущен')
+      notify.success('Список запрещённых расширений сохранён')
       await load()
     } catch (e) {
-      setError(errorMessage(e))
+      notify.error(errorMessage(e))
     }
   }
 
   async function removeBannedExtension(ext: string) {
-    setError('')
-    setInfo('')
     if (bannedExtensions.length <= 1) {
-      setError('Должно остаться хотя бы одно расширение')
+      notify.error('Должно остаться хотя бы одно расширение')
       return
     }
     try {
       const next = bannedExtensions.filter((item) => item !== ext)
       await api.updateBannedExtensions(next)
-      setInfo('Список запрещённых расширений сохранён')
+      notify.success('Список запрещённых расширений сохранён')
       await load()
     } catch (e) {
-      setError(errorMessage(e))
+      notify.error(errorMessage(e))
     }
   }
 
   async function saveMailPolicy() {
-    setError('')
-    setInfo('')
     try {
       await api.updateMailPolicy(scanInternal)
-      setInfo(scanInternal ? 'Проверка внутренней почты включена' : 'Проверка внутренней почты отключена')
+      notify.success(scanInternal ? 'Проверка внутренней почты включена' : 'Проверка внутренней почты отключена')
       await load()
     } catch (e) {
-      setError(errorMessage(e))
+      notify.error(errorMessage(e))
     }
   }
 
   return (
     <div>
       <div className="topbar"><h2>Антиспам</h2></div>
-      {error && <div className="error prewrap card">{error}</div>}
-      {info && <div className="info card">{info}</div>}
       {canWrite && (
         <div className="card">
           <h3>Порог SpamAssassin</h3>
@@ -259,25 +241,23 @@ export default function AntispamPage() {
         </div>
       )}
       <div className="card">
-        <h3>Белый список {isUser ? '(личный)' : ''}</h3>
-        {!isUser && (
-          <div className="form-row" style={{ marginBottom: 10 }}>
-            <input
-              placeholder="Аккаунт (пусто = глобально)"
-              value={account}
-              onChange={(e) => setAccount(e.target.value)}
-              style={{ flex: 1 }}
-            />
-            <button className="secondary" onClick={() => load()}>Применить</button>
-          </div>
-        )}
+        <h3>Белый список</h3>
+        <div className="form-row" style={{ marginBottom: 10 }}>
+          <input
+            placeholder="Аккаунт (пусто = глобально)"
+            value={account}
+            onChange={(e) => setAccount(e.target.value)}
+            style={{ flex: 1 }}
+          />
+          <button className="secondary" onClick={() => load()}>Применить</button>
+        </div>
         <div className="form-row">
           <input placeholder="email / @domain.ru / IP" value={whitelistEntry} onChange={(e) => setWhitelistEntry(e.target.value)} />
-          <button onClick={() => addToList('whitelist', whitelistEntry, () => setWhitelistEntry(''))}>Добавить</button>
+          {canWrite && <button onClick={() => addToList('whitelist', whitelistEntry, () => setWhitelistEntry(''))}>Добавить</button>}
         </div>
         <EntryList
           items={whitelist}
-          canRemove={canWrite || isUser}
+          canRemove={canWrite}
           onRemove={(entry) => removeFromList('whitelist', entry)}
           emptyText="Список пуст"
         />

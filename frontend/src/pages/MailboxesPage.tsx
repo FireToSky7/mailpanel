@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, getUser } from '../api'
 import { errorMessage, validateEmail, validateMailboxPassword } from '../errors'
+import { notify } from '../notify'
 
 function formatQuota(usedMb: number | undefined, quotaMb: number): string {
   const used = usedMb ?? 0
@@ -14,7 +15,6 @@ export default function MailboxesPage() {
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
   const [quota, setQuota] = useState('1024')
-  const [error, setError] = useState('')
   const role = getUser()?.role
   const canWrite = role === 'superadmin' || role === 'admin'
 
@@ -22,24 +22,25 @@ export default function MailboxesPage() {
     setItems(await api.mailboxes())
   }
 
-  useEffect(() => { load().catch((e) => setError(errorMessage(e))) }, [])
+  useEffect(() => {
+    load().catch((e) => notify.error(errorMessage(e)))
+  }, [])
 
   async function create() {
-    setError('')
     const email = username.trim().toLowerCase()
     const usernameError = validateEmail(username, 'Ящик')
     const passwordError = validateMailboxPassword(password)
     const quotaNum = Number(quota)
     if (!Number.isFinite(quotaNum) || quotaNum < 0) {
-      setError('Квота: введите число 0 или больше (MB)')
+      notify.error('Квота: введите число 0 или больше (MB)')
       return
     }
     if (usernameError || passwordError) {
-      setError([usernameError, passwordError].filter(Boolean).join('\n'))
+      notify.error([usernameError, passwordError].filter(Boolean).join('\n'))
       return
     }
     if (items.some((m) => m.username.toLowerCase() === email)) {
-      setError(`Ящик уже существует: ${email}`)
+      notify.error(`Ящик уже существует: ${email}`)
       return
     }
     try {
@@ -48,20 +49,21 @@ export default function MailboxesPage() {
       setPassword('')
       setName('')
       setQuota('1024')
+      notify.success('Ящик создан')
       await load()
     } catch (e) {
-      setError(errorMessage(e))
+      notify.error(errorMessage(e))
     }
   }
 
   async function remove(u: string) {
     if (!confirm(`Удалить ${u}?`)) return
-    setError('')
     try {
       await api.deleteMailbox(u)
+      notify.success('Ящик удалён')
       await load()
     } catch (e) {
-      setError(errorMessage(e))
+      notify.error(errorMessage(e))
     }
   }
 
@@ -70,14 +72,14 @@ export default function MailboxesPage() {
     if (!p) return
     const passwordError = validateMailboxPassword(p)
     if (passwordError) {
-      alert(passwordError)
+      notify.error(passwordError)
       return
     }
     try {
       await api.mailboxPassword(u, p)
-      alert('Пароль изменён')
+      notify.success('Пароль изменён')
     } catch (e) {
-      alert(errorMessage(e))
+      notify.error(errorMessage(e))
     }
   }
 
@@ -86,15 +88,15 @@ export default function MailboxesPage() {
     if (raw === null) return
     const quotaNum = Number(raw)
     if (!Number.isFinite(quotaNum) || quotaNum < 0) {
-      alert('Квота: введите число 0 или больше')
+      notify.error('Квота: введите число 0 или больше')
       return
     }
-    setError('')
     try {
       await api.mailboxQuota(u, quotaNum)
+      notify.success('Квота сохранена')
       await load()
     } catch (e) {
-      setError(errorMessage(e))
+      notify.error(errorMessage(e))
     }
   }
 
@@ -102,12 +104,38 @@ export default function MailboxesPage() {
     const enable = !active
     const action = enable ? 'активировать' : 'отключить'
     if (!confirm(`${action} ящик ${u}?`)) return
-    setError('')
     try {
       await api.mailboxActive(u, enable)
+      notify.success(enable ? 'Ящик включён' : 'Ящик отключён')
       await load()
     } catch (e) {
-      setError(errorMessage(e))
+      notify.error(errorMessage(e))
+    }
+  }
+
+  async function configureForwarding(u: string, current?: string | null) {
+    const raw = prompt(
+      `Пересылка для ${u}\nУкажите адрес получателя или оставьте пустым, чтобы отключить.`,
+      current || '',
+    )
+    if (raw === null) return
+    const goto = raw.trim()
+    try {
+      if (!goto) {
+        await api.clearMailboxForwarding(u)
+        notify.success('Пересылка отключена')
+      } else {
+        const emailError = validateEmail(goto, 'Пересылка на')
+        if (emailError) {
+          notify.error(emailError)
+          return
+        }
+        await api.setMailboxForwarding(u, goto)
+        notify.success(`Пересылка настроена: ${goto}`)
+      }
+      await load()
+    } catch (e) {
+      notify.error(errorMessage(e))
     }
   }
 
@@ -124,28 +152,42 @@ export default function MailboxesPage() {
             <input type="number" min={0} placeholder="Квота MB" value={quota} onChange={(e) => setQuota(e.target.value)} style={{ width: 110 }} />
             <button onClick={create}>Создать</button>
           </div>
-          {error && <div className="error prewrap">{error}</div>}
           <p className="muted">
             Адрес ящика уникален. Пароль: мин. 8 символов, заглавная и строчная латинские буквы, цифра. Квота в мегабайтах (1024 = 1 ГБ).
           </p>
         </div>
       )}
-      {!canWrite && error && <div className="error prewrap">{error}</div>}
-      <div className="card">
-        <table>
-          <thead><tr><th>Ящик</th><th>Имя</th><th>Занято / квота</th><th>Активен</th>{canWrite && <th></th>}</tr></thead>
+      <div className="card table-scroll">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Ящик</th>
+              <th>Имя</th>
+              <th>Занято / квота</th>
+              <th>Пересылка</th>
+              <th>Активен</th>
+              {canWrite && <th className="actions">Действия</th>}
+            </tr>
+          </thead>
           <tbody>
             {items.map((m) => (
               <tr key={m.username} className={m.active ? '' : 'inactive-row'}>
-                <td>{m.username}</td><td>{m.name}</td><td>{formatQuota(m.used_mb, m.quota)}</td><td>{m.active ? 'да' : 'нет'}</td>
-                {canWrite && <td className="actions">
-                  <button className="secondary" onClick={() => resetPassword(m.username)}>Пароль</button>
-                  <button className="secondary" onClick={() => changeQuota(m.username, m.quota)}>Квота</button>
-                  <button className="secondary" onClick={() => toggleActive(m.username, m.active)}>
-                    {m.active ? 'Отключить' : 'Включить'}
-                  </button>
-                  <button className="danger" onClick={() => remove(m.username)}>Удалить</button>
-                </td>}
+                <td title={m.username}>{m.username}</td>
+                <td>{m.name}</td>
+                <td>{formatQuota(m.used_mb, m.quota)}</td>
+                <td title={m.forwarding_to || ''}>{m.forwarding_to || '—'}</td>
+                <td>{m.active ? 'да' : 'нет'}</td>
+                {canWrite && (
+                  <td className="actions">
+                    <button className="secondary" onClick={() => configureForwarding(m.username, m.forwarding_to)}>Пересылка</button>
+                    <button className="secondary" onClick={() => resetPassword(m.username)}>Пароль</button>
+                    <button className="secondary" onClick={() => changeQuota(m.username, m.quota)}>Квота</button>
+                    <button className="secondary" onClick={() => toggleActive(m.username, m.active)}>
+                      {m.active ? 'Отключить' : 'Включить'}
+                    </button>
+                    <button className="danger" onClick={() => remove(m.username)}>Удалить</button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

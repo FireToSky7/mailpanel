@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, getUser, type QueueItem } from '../api'
 import { errorMessage } from '../errors'
+import { notify } from '../notify'
 
 const STATUS_OPTIONS = [
   { value: '', label: 'Все' },
@@ -23,16 +24,13 @@ export default function QueuePage() {
   const [sender, setSender] = useState('')
   const [recipient, setRecipient] = useState('')
   const [headers, setHeaders] = useState<string | null>(null)
-  const [error, setError] = useState('')
-  const [info, setInfo] = useState('')
   const canWrite = ['superadmin', 'admin'].includes(getUser()?.role || '')
 
   async function load() {
-    setError('')
     try {
       setData(await api.queue(status || undefined, sender || undefined, recipient || undefined))
     } catch (e) {
-      setError(errorMessage(e))
+      notify.error(errorMessage(e))
     }
   }
 
@@ -40,28 +38,24 @@ export default function QueuePage() {
 
   async function act(action: (id: string) => Promise<unknown>, item: QueueItem, label: string) {
     if (!confirm(`${label} для ${item.queue_id}?`)) return
-    setError('')
-    setInfo('')
     try {
       await action(item.queue_id)
-      setInfo(`${label}: ${item.queue_id}`)
+      notify.success(`${label}: ${item.queue_id}`)
       setHeaders(null)
       await load()
     } catch (e) {
-      setError(errorMessage(e))
+      notify.error(errorMessage(e))
     }
   }
 
   async function flushAll() {
     if (!confirm('Повторить доставку для всей очереди Postfix?')) return
-    setError('')
-    setInfo('')
     try {
       await api.flushQueue()
-      setInfo('Запущена повторная доставка всей очереди')
+      notify.success('Запущена повторная доставка всей очереди')
       await load()
     } catch (e) {
-      setError(errorMessage(e))
+      notify.error(errorMessage(e))
     }
   }
 
@@ -90,8 +84,6 @@ export default function QueuePage() {
           {canWrite && <button className="secondary" onClick={flushAll}>Повторить всю очередь</button>}
         </div>
       </div>
-      {error && <div className="error prewrap card">{error}</div>}
-      {info && <div className="info card">{info}</div>}
       <div className="card table-scroll">
         <table className="data-table">
           <colgroup>
@@ -134,7 +126,7 @@ export default function QueuePage() {
                         const res = await api.queueHeaders(item.queue_id)
                         setHeaders(res.headers)
                       } catch (e) {
-                        setError(errorMessage(e))
+                        notify.error(errorMessage(e))
                       }
                     }}
                   >

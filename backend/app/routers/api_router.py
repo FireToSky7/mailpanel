@@ -123,12 +123,6 @@ def _audit(user: PanelUser, request: Request, action: str, resource: str, detail
     write_audit(user, action, resource, details, client_ip(request))
 
 
-def _wblist_account(user: PanelUser, account: str | None) -> str | None:
-    if user.role == Role.USER:
-        return mail_ops.user_wblist_account(user)
-    return account
-
-
 @router.get("/dashboard", dependencies=[Depends(require_permission("mail.read"))])
 def dashboard():
     services = [mail_ops.service_status(n) for n in get_config().services]
@@ -193,6 +187,43 @@ def mailbox_active(username: str, payload: MailboxActive, request: Request, user
     return {"ok": True}
 
 
+@router.get("/mailboxes/{username:path}/forwarding", dependencies=[Depends(require_permission("mail.read"))])
+def get_mailbox_forwarding(username: str):
+    address = username.lower()
+    return {"address": address, "goto": mail_ops.get_forwarding(address)}
+
+
+@router.put("/mailboxes/{username:path}/forwarding", dependencies=[Depends(require_permission("mail.write"))])
+def put_mailbox_forwarding(
+    username: str,
+    payload: ForwardingUpdate,
+    request: Request,
+    user: PanelUser = Depends(require_permission("mail.write")),
+):
+    address = username.lower()
+    goto = normalize_email(payload.goto, "Пересылка на")
+    try:
+        if not mail_ops.mailbox_exists(address):
+            raise ValueError(f"Ящик не найден: {address}")
+        mail_ops.set_forwarding(address, goto)
+        _audit(user, request, "forwarding_set", "mailbox", f"{address} -> {goto}")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True}
+
+
+@router.delete("/mailboxes/{username:path}/forwarding", dependencies=[Depends(require_permission("mail.write"))])
+def delete_mailbox_forwarding(
+    username: str,
+    request: Request,
+    user: PanelUser = Depends(require_permission("mail.write")),
+):
+    address = username.lower()
+    mail_ops.clear_forwarding(address)
+    _audit(user, request, "forwarding_clear", "mailbox", address)
+    return {"ok": True}
+
+
 @router.get("/aliases", dependencies=[Depends(require_permission("mail.read"))])
 def get_aliases():
     return mail_ops.list_aliases(get_config().panel.mail_domain)
@@ -220,62 +251,30 @@ def del_alias(address: str, request: Request, user: PanelUser = Depends(require_
     return {"ok": True}
 
 
-@router.get("/portal/forwarding", dependencies=[Depends(require_permission("forwarding.self"))])
-def get_my_forwarding(user: PanelUser = Depends(require_permission("forwarding.self"))):
-    account = mail_ops.user_wblist_account(user)
-    return {"address": account, "goto": mail_ops.get_forwarding(account)}
-
-
-@router.put("/portal/forwarding", dependencies=[Depends(require_permission("forwarding.self"))])
-def set_my_forwarding(payload: ForwardingUpdate, user: PanelUser = Depends(require_permission("forwarding.self"))):
-    mail_ops.set_forwarding(mail_ops.user_wblist_account(user), payload.goto)
-    return {"ok": True}
-
-
-@router.delete("/portal/forwarding", dependencies=[Depends(require_permission("forwarding.self"))])
-def clear_my_forwarding(user: PanelUser = Depends(require_permission("forwarding.self"))):
-    mail_ops.clear_forwarding(mail_ops.user_wblist_account(user))
-    return {"ok": True}
-
-
-@router.get("/wblist/{list_type}")
+@router.get("/wblist/{list_type}", dependencies=[Depends(require_permission("antispam.read"))])
 def get_wblist(
     list_type: str,
     account: str | None = None,
-    user: PanelUser = Depends(get_current_user),
 ):
     if list_type not in ("whitelist", "blacklist"):
         raise HTTPException(400, "Invalid list type")
-    if user.role == Role.USER:
-        if not role_has_permission(user.role, "antispam.self"):
-            raise HTTPException(403)
-        account = mail_ops.user_wblist_account(user)
-    elif not role_has_permission(user.role, "antispam.read"):
-        raise HTTPException(403)
     try:
-        entries = iredapd.list_wblist(list_type, _wblist_account(user, account))
+        entries = iredapd.list_wblist(list_type, account)
     except IredapdError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"entries": entries}
 
 
-@router.post("/wblist/{list_type}")
+@router.post("/wblist/{list_type}", dependencies=[Depends(require_permission("antispam.write"))])
 def post_wblist(
     list_type: str,
     payload: WblistRequest,
     request: Request,
-    user: PanelUser = Depends(get_current_user),
+    user: PanelUser = Depends(require_permission("antispam.write")),
 ):
     if list_type not in ("whitelist", "blacklist"):
         raise HTTPException(400, "Invalid list type")
-    if user.role == Role.USER:
-        account = mail_ops.user_wblist_account(user)
-        if list_type != "whitelist":
-            raise HTTPException(403, "Users can only manage personal whitelist")
-    elif user.role not in (Role.ADMIN, Role.SUPERADMIN):
-        raise HTTPException(403)
-    else:
-        account = payload.account
+    account = payload.account
     if not payload.entries or not any(item.strip() for item in payload.entries):
         raise HTTPException(400, "Укажите запись для добавления в список")
     try:
@@ -291,21 +290,16 @@ def post_wblist(
     return {"ok": True}
 
 
-@router.delete("/wblist/{list_type}")
+@router.delete("/wblist/{list_type}", dependencies=[Depends(require_permission("antispam.write"))])
 def delete_wblist(
     list_type: str,
     payload: WblistRequest,
     request: Request,
-    user: PanelUser = Depends(get_current_user),
+    user: PanelUser = Depends(require_permission("antispam.write")),
 ):
-    if user.role == Role.USER:
-        account = mail_ops.user_wblist_account(user)
-        if list_type != "whitelist":
-            raise HTTPException(403)
-    elif user.role not in (Role.ADMIN, Role.SUPERADMIN):
-        raise HTTPException(403)
-    else:
-        account = payload.account
+    if list_type not in ("whitelist", "blacklist"):
+        raise HTTPException(400, "Invalid list type")
+    account = payload.account
     try:
         validated = [iredapd.validate_wblist_entry(e) for e in payload.entries]
         iredapd.delete_wblist(list_type, validated, account)
@@ -418,89 +412,51 @@ def put_mail_policy(
     return result
 
 
-def _quarantine_recipient_filter(user: PanelUser) -> str | None:
-    if user.role == Role.USER:
-        if not user.mailbox:
-            raise HTTPException(403, "У пользователя не привязан ящик")
-        return user.mailbox.lower()
-    return None
-
-
-def _ensure_quarantine_access(user: PanelUser, item: dict[str, Any]) -> None:
-    if user.role == Role.USER and not quarantine_ops.user_can_access_item(item, user.mailbox):
-        raise HTTPException(403, "Нет доступа к этому письму")
-
-
-@router.get("/quarantine")
+@router.get("/quarantine", dependencies=[Depends(require_permission("quarantine.read"))])
 def get_quarantine(
     limit: int = 50,
     offset: int = 0,
     content: str | None = None,
-    user: PanelUser = Depends(get_current_user),
 ):
-    if user.role == Role.USER:
-        if not role_has_permission(user.role, "quarantine.self"):
-            raise HTTPException(403)
-    elif not role_has_permission(user.role, "quarantine.read"):
-        raise HTTPException(403)
     try:
-        recipient = _quarantine_recipient_filter(user)
-        return quarantine_ops.list_quarantine(limit, offset, recipient, content)
+        return quarantine_ops.list_quarantine(limit, offset, None, content)
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
-@router.get("/quarantine/{mail_id}")
+@router.get("/quarantine/{mail_id}", dependencies=[Depends(require_permission("quarantine.read"))])
 def get_quarantine_one(
     mail_id: str,
     partition_tag: str = "",
-    user: PanelUser = Depends(get_current_user),
 ):
-    if user.role == Role.USER:
-        if not role_has_permission(user.role, "quarantine.self"):
-            raise HTTPException(403)
-    elif not role_has_permission(user.role, "quarantine.read"):
-        raise HTTPException(403)
     try:
-        item = quarantine_ops.get_quarantine_item(mail_id, partition_tag)
-        _ensure_quarantine_access(user, item)
-        return item
+        return quarantine_ops.get_quarantine_item(mail_id, partition_tag)
     except QuarantineError as exc:
         raise HTTPException(404, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
-@router.get("/quarantine/{mail_id}/body")
+@router.get("/quarantine/{mail_id}/body", dependencies=[Depends(require_permission("quarantine.read"))])
 def get_quarantine_body(
     mail_id: str,
     partition_tag: str = "",
-    user: PanelUser = Depends(get_current_user),
 ):
-    if user.role == Role.USER:
-        if not role_has_permission(user.role, "quarantine.self"):
-            raise HTTPException(403)
-    elif not role_has_permission(user.role, "quarantine.read"):
-        raise HTTPException(403)
     try:
-        body = quarantine_ops.get_quarantine_body(mail_id, partition_tag)
-        _ensure_quarantine_access(user, body)
-        return body
+        return quarantine_ops.get_quarantine_body(mail_id, partition_tag)
     except QuarantineError as exc:
         raise HTTPException(404, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
-@router.post("/quarantine/{mail_id}/release")
+@router.post("/quarantine/{mail_id}/release", dependencies=[Depends(require_permission("quarantine.write"))])
 def release_quarantine_msg(
     mail_id: str,
     request: Request,
     partition_tag: str = "",
-    user: PanelUser = Depends(get_current_user),
+    user: PanelUser = Depends(require_permission("quarantine.write")),
 ):
-    if user.role not in (Role.ADMIN, Role.SUPERADMIN):
-        raise HTTPException(403)
     try:
         item = quarantine_ops.get_quarantine_item(mail_id, partition_tag)
         result = quarantine_ops.release_quarantine(mail_id, item["partition_tag"])
@@ -512,22 +468,15 @@ def release_quarantine_msg(
         raise HTTPException(400, str(exc)) from exc
 
 
-@router.delete("/quarantine/{mail_id}")
+@router.delete("/quarantine/{mail_id}", dependencies=[Depends(require_permission("quarantine.write"))])
 def delete_quarantine_msg(
     mail_id: str,
     request: Request,
     partition_tag: str = "",
-    user: PanelUser = Depends(get_current_user),
+    user: PanelUser = Depends(require_permission("quarantine.write")),
 ):
-    if user.role == Role.USER:
-        if not role_has_permission(user.role, "quarantine.self"):
-            raise HTTPException(403)
-    elif user.role not in (Role.ADMIN, Role.SUPERADMIN):
-        raise HTTPException(403)
     try:
         item = quarantine_ops.get_quarantine_item(mail_id, partition_tag)
-        if user.role == Role.USER:
-            _ensure_quarantine_access(user, item)
         quarantine_ops.delete_quarantine(mail_id, item["partition_tag"])
         _audit(user, request, "delete", "quarantine", mail_id)
         return {"ok": True}
@@ -712,6 +661,8 @@ def get_panel_users():
 
 @router.post("/panel-users", dependencies=[Depends(require_permission("panel.users.write"))])
 def post_panel_user(payload: PanelUserCreate, request: Request, user: PanelUser = Depends(require_permission("panel.users.write"))):
+    if payload.role == Role.USER:
+        raise HTTPException(400, "Роль user отключена")
     try:
         mail_ops.create_panel_user(payload.username, payload.password, payload.role, payload.display_name, payload.mailbox)
         _audit(user, request, "create", "panel_user", payload.username)

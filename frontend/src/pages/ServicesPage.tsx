@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { api, getUser, type ServiceStatus } from '../api'
 import ServiceStatusBadge from '../components/ServiceStatusBadge'
+import { errorMessage } from '../errors'
+import { notify } from '../notify'
 
 const ENABLED_LABELS: Record<string, string> = {
   enabled: 'автозапуск',
@@ -20,6 +22,8 @@ export default function ServicesPage() {
     try {
       setServices(await api.services())
       setFail2ban(await api.fail2ban())
+    } catch (e) {
+      notify.error(errorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -67,8 +71,13 @@ export default function ServicesPage() {
                     <button
                       className="secondary"
                       onClick={async () => {
-                        await api.restartService(s.name)
-                        await load()
+                        try {
+                          await api.restartService(s.name)
+                          notify.success(`Служба ${s.name} перезапущена`)
+                          await load()
+                        } catch (e) {
+                          notify.error(errorMessage(e))
+                        }
                       }}
                     >
                       Перезапуск
@@ -95,8 +104,13 @@ export default function ServicesPage() {
                         type="button"
                         className="secondary entry-remove"
                         onClick={async () => {
-                          await api.unban(j.jail, ip)
-                          await load()
+                          try {
+                            await api.unban(j.jail, ip)
+                            notify.success(`IP ${ip} разбанен`)
+                            await load()
+                          } catch (e) {
+                            notify.error(errorMessage(e))
+                          }
                         }}
                       >
                         Разбан

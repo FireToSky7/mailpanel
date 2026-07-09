@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { errorMessage } from '../errors'
+import { notify } from '../notify'
 
 export default function LogsPage() {
   const [items, setItems] = useState<any[]>([])
@@ -11,22 +13,30 @@ export default function LogsPage() {
   const [audit, setAudit] = useState<any[]>([])
 
   async function search() {
-    const params = new URLSearchParams()
-    if (q) params.set('q', q)
-    if (queueId) params.set('queue_id', queueId)
-    const res: any = await api.logsSearch(params)
-    setItems(res.items)
-    setTotal(res.total)
+    try {
+      const params = new URLSearchParams()
+      if (q) params.set('q', q)
+      if (queueId) params.set('queue_id', queueId)
+      const res: any = await api.logsSearch(params)
+      setItems(res.items)
+      setTotal(res.total)
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
   }
 
   async function loadLive(type: string) {
-    const res: any = await api.logsLive(type)
-    setLive(res.lines.join('\n'))
+    try {
+      const res: any = await api.logsLive(type)
+      setLive(res.lines.join('\n'))
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
   }
 
   useEffect(() => {
-    search().catch(console.error)
-    api.audit().then(setAudit).catch(console.error)
+    search().catch((e) => notify.error(errorMessage(e)))
+    api.audit().then(setAudit).catch((e) => notify.error(errorMessage(e)))
   }, [])
 
   return (
@@ -38,7 +48,14 @@ export default function LogsPage() {
           <input placeholder="Текст" value={q} onChange={(e) => setQ(e.target.value)} />
           <input placeholder="Queue-ID" value={queueId} onChange={(e) => setQueueId(e.target.value)} />
           <button onClick={search}>Найти</button>
-          <button className="secondary" onClick={async () => { if (queueId) setTrace(await api.logsTrace(queueId)) }}>Трейс</button>
+          <button className="secondary" onClick={async () => {
+            if (!queueId) return
+            try {
+              setTrace(await api.logsTrace(queueId))
+            } catch (e) {
+              notify.error(errorMessage(e))
+            }
+          }}>Трейс</button>
         </div>
         <p className="muted">Найдено: {total}</p>
         <div className="log-box" style={{ maxHeight: 300 }}>

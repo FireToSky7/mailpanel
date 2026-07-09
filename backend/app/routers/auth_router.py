@@ -36,6 +36,11 @@ def login(payload: LoginRequest, request: Request) -> LoginResponse:
     user = authenticate(payload.username, payload.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    if user.role == Role.USER:
+        raise HTTPException(
+            status_code=403,
+            detail="Роль user отключена. Обычные пользователи работают через Roundcube.",
+        )
     write_audit(user, "login", "auth", ip_address=client_ip(request))
     return LoginResponse(
         access_token=create_access_token(user),

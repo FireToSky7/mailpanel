@@ -30,8 +30,8 @@ def create_panel_user(
     display_name: str = "",
     mailbox: str | None = None,
 ) -> None:
-    if role == Role.USER and not mailbox:
-        raise ValueError("User role requires linked mailbox email")
+    if role == Role.USER:
+        raise ValueError("Роль user отключена. Создайте admin или viewer.")
     with panel_conn() as conn:
         execute(
             conn,
@@ -122,7 +122,10 @@ def mailbox_exists(username: str) -> bool:
 def list_mailboxes(domain: str | None = None) -> list[dict[str, Any]]:
     query = (
         "SELECT m.username, m.name, m.domain, m.quota, m.active, m.created, m.modified, "
-        "COALESCE(u.bytes, 0) AS bytes_used, COALESCE(u.messages, 0) AS messages "
+        "COALESCE(u.bytes, 0) AS bytes_used, COALESCE(u.messages, 0) AS messages, "
+        "(SELECT GROUP_CONCAT(f.forwarding ORDER BY f.forwarding SEPARATOR ', ') "
+        " FROM forwardings f WHERE f.address = m.username AND f.is_forwarding = 1 "
+        " AND f.forwarding != m.username) AS forwarding_to "
         "FROM mailbox m "
         "LEFT JOIN used_quota u ON m.username = u.username"
     )
@@ -489,11 +492,3 @@ def list_audit_log(limit: int = 100) -> list[dict[str, Any]]:
             "FROM audit_log ORDER BY id DESC LIMIT %s",
             (limit,),
         )
-
-
-def user_wblist_account(user: PanelUser) -> str:
-    if user.role != Role.USER:
-        raise ValueError("Not a mailbox user")
-    if not user.mailbox:
-        raise ValueError("Mailbox not linked")
-    return user.mailbox

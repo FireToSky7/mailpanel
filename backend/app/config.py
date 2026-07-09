@@ -31,16 +31,13 @@ PERMISSIONS: dict[str, set[Role]] = {
     "mail.write": {Role.SUPERADMIN, Role.ADMIN},
     "antispam.read": {Role.SUPERADMIN, Role.ADMIN, Role.VIEWER},
     "antispam.write": {Role.SUPERADMIN, Role.ADMIN},
-    "antispam.self": {Role.USER},
     "logs.read": {Role.SUPERADMIN, Role.ADMIN, Role.VIEWER},
     "services.read": {Role.SUPERADMIN, Role.ADMIN, Role.VIEWER},
     "services.restart": {Role.SUPERADMIN, Role.ADMIN},
-    "quarantine.read": {Role.SUPERADMIN, Role.ADMIN, Role.VIEWER, Role.USER},
+    "quarantine.read": {Role.SUPERADMIN, Role.ADMIN, Role.VIEWER},
     "quarantine.write": {Role.SUPERADMIN, Role.ADMIN},
-    "quarantine.self": {Role.USER},
     "queue.read": {Role.SUPERADMIN, Role.ADMIN},
     "queue.write": {Role.SUPERADMIN, Role.ADMIN},
-    "forwarding.self": {Role.USER},
 }
 
 

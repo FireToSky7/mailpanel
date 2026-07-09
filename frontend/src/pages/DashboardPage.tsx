@@ -1,16 +1,16 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import ServiceStatusBadge from '../components/ServiceStatusBadge'
+import { errorMessage } from '../errors'
+import { notify } from '../notify'
 
 export default function DashboardPage() {
   const [data, setData] = useState<any>(null)
-  const [error, setError] = useState('')
 
   useEffect(() => {
-    api.dashboard().then(setData).catch((e) => setError(e.message))
+    api.dashboard().then(setData).catch((e) => notify.error(errorMessage(e)))
   }, [])
 
-  if (error) return <div className="error">{error}</div>
   if (!data) return <div>Загрузка...</div>
 
   const stats = data.stats
