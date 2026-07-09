@@ -37,6 +37,8 @@ paths:
   amavisd_config: "/etc/amavisd/amavisd.conf"
   banned_extensions_file: "/etc/mailpanel/banned_extensions.txt"
   antispam_policy_file: "/etc/mailpanel/antispam_policy.yaml"
+  content_filters_file: "/etc/mailpanel/content_filters.yaml"
+  spamassassin_filters_file: "/etc/mail/spamassassin/mailpanel_filters.cf"
   maillog: "/var/log/maillog"
   iredapd_log: "/var/log/iredapd/iredapd.log"
   dovecot_log: "/var/log/dovecot/dovecot.log"

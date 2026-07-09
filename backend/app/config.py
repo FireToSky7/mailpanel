@@ -73,6 +73,8 @@ class PathsConfig(BaseModel):
     amavisd_config: str = "/etc/amavisd/amavisd.conf"
     banned_extensions_file: str = "/etc/mailpanel/banned_extensions.txt"
     antispam_policy_file: str = "/etc/mailpanel/antispam_policy.yaml"
+    content_filters_file: str = "/etc/mailpanel/content_filters.yaml"
+    spamassassin_filters_file: str = "/etc/mail/spamassassin/mailpanel_filters.cf"
 
 
 class LogCollectorConfig(BaseModel):

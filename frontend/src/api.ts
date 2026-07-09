@@ -80,6 +80,24 @@ export type MailPolicyData = {
   notes: string[]
 }
 
+export type ContentFilter = {
+  id: string
+  field: 'subject' | 'body'
+  field_label: string
+  pattern: string
+  action: string
+  action_label: string
+  enabled: boolean
+}
+
+export type ContentFiltersData = {
+  items: ContentFilter[]
+  total: number
+  source_file: string
+  rules_file: string
+  notes: string[]
+}
+
 export type AuditEntry = {
   id: number
   username: string
@@ -315,6 +333,19 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ scan_internal_mail }),
     }),
+  contentFilters: () => request<ContentFiltersData>('/api/rules'),
+  createContentFilter: (body: { field: 'subject' | 'body'; pattern: string; enabled?: boolean }) =>
+    request<{ ok: boolean; item: ContentFilter }>('/api/rules', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateContentFilter: (ruleId: string, body: { field?: 'subject' | 'body'; pattern?: string; enabled?: boolean }) =>
+    request<{ ok: boolean; item: ContentFilter }>(`/api/rules/${encodeURIComponent(ruleId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  deleteContentFilter: (ruleId: string) =>
+    request<{ ok: boolean }>(`/api/rules/${encodeURIComponent(ruleId)}`, { method: 'DELETE' }),
   greylisting: () => request<GreylistingData>('/api/greylisting'),
   quarantine: (content?: string, limit = 50, offset = 0) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
@@ -381,6 +412,7 @@ export function canAccess(role: string, section: string): boolean {
     aliases: ['superadmin', 'admin', 'viewer'],
     groups: ['superadmin', 'admin', 'viewer'],
     antispam: ['superadmin', 'admin', 'viewer'],
+    rules: ['superadmin', 'admin', 'viewer'],
     quarantine: ['superadmin', 'admin', 'viewer'],
     queue: ['superadmin', 'admin'],
     logs: ['superadmin', 'admin', 'viewer'],

@@ -7,8 +7,9 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.auth import PanelUser, Role, client_ip, get_current_user, require_permission, write_audit
 from app.config import get_config, role_has_permission
-from app.services import amavis_policy, group_ops, iredapd, log_reader, mail_ops
+from app.services import amavis_policy, content_filter_ops, group_ops, iredapd, log_reader, mail_ops
 from app.services.amavis_policy import AmavisPolicyError
+from app.services.content_filter_ops import ContentFilterError
 from app.services.iredapd import IredapdError
 from app.services import mail_journal_search, postfix_diagnostics, postfix_queue, quarantine_ops
 from app.services.postfix_queue import PostfixQueueError
@@ -124,6 +125,18 @@ class BannedExtensionsUpdate(BaseModel):
 
 class MailPolicyUpdate(BaseModel):
     scan_internal_mail: bool
+
+
+class ContentFilterCreate(BaseModel):
+    field: Literal["subject", "body"]
+    pattern: str = Field(min_length=1, max_length=200)
+    enabled: bool = True
+
+
+class ContentFilterUpdate(BaseModel):
+    field: Literal["subject", "body"] | None = None
+    pattern: str | None = Field(default=None, min_length=1, max_length=200)
+    enabled: bool | None = None
 
 
 class PanelUserCreate(BaseModel):
@@ -539,6 +552,71 @@ def put_mail_policy(
     except AmavisPolicyError as exc:
         raise HTTPException(400, str(exc)) from exc
     return result
+
+
+@router.get("/rules", dependencies=[Depends(require_permission("antispam.read"))])
+def get_content_filters():
+    return content_filter_ops.list_content_filters()
+
+
+@router.post("/rules", dependencies=[Depends(require_permission("antispam.write"))])
+def post_content_filter(
+    payload: ContentFilterCreate,
+    request: Request,
+    user: PanelUser = Depends(require_permission("antispam.write")),
+):
+    try:
+        rule = content_filter_ops.create_content_filter(payload.field, payload.pattern, payload.enabled)
+        _audit(
+            user,
+            request,
+            "rule_create",
+            "content_filter",
+            f"{rule['field']}:{rule['pattern']}",
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ContentFilterError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "item": rule}
+
+
+@router.put("/rules/{rule_id}", dependencies=[Depends(require_permission("antispam.write"))])
+def put_content_filter(
+    rule_id: str,
+    payload: ContentFilterUpdate,
+    request: Request,
+    user: PanelUser = Depends(require_permission("antispam.write")),
+):
+    try:
+        rule = content_filter_ops.update_content_filter(
+            rule_id,
+            field=payload.field,
+            pattern=payload.pattern,
+            enabled=payload.enabled,
+        )
+        _audit(user, request, "rule_update", "content_filter", rule_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ContentFilterError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "item": rule}
+
+
+@router.delete("/rules/{rule_id}", dependencies=[Depends(require_permission("antispam.write"))])
+def delete_content_filter(
+    rule_id: str,
+    request: Request,
+    user: PanelUser = Depends(require_permission("antispam.write")),
+):
+    try:
+        content_filter_ops.delete_content_filter(rule_id)
+        _audit(user, request, "rule_delete", "content_filter", rule_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ContentFilterError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True}
 
 
 @router.get("/quarantine", dependencies=[Depends(require_permission("quarantine.read"))])
