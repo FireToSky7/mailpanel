@@ -1,0 +1,214 @@
+import { useEffect, useRef, useState } from 'react'
+import { api, getUser, type Mailbox, type MailGroup } from '../api'
+import { errorMessage, validateEmail } from '../errors'
+import { notify } from '../notify'
+
+export default function GroupsPage() {
+  const [items, setItems] = useState<MailGroup[]>([])
+  const [mailboxes, setMailboxes] = useState<Mailbox[]>([])
+  const [address, setAddress] = useState('')
+  const [membersInput, setMembersInput] = useState('')
+  const [selectedGroup, setSelectedGroup] = useState('')
+  const [newMember, setNewMember] = useState('')
+  const role = getUser()?.role
+  const canWrite = role === 'superadmin' || role === 'admin'
+
+  async function load() {
+    const [groups, boxes] = await Promise.all([api.groups(), api.mailboxes()])
+    setItems(groups)
+    setMailboxes(boxes)
+    if (!selectedGroup && groups.length) {
+      setSelectedGroup(groups[0].address)
+    }
+  }
+
+  useEffect(() => {
+    load().catch((e) => notify.error(errorMessage(e)))
+  }, [])
+
+  function parseMembers(text: string): string[] {
+    return text
+      .split(/[\n,;]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+
+  async function create() {
+    const addressError = validateEmail(address, 'Адрес группы')
+    const members = parseMembers(membersInput)
+    if (addressError) {
+      notify.error(addressError)
+      return
+    }
+    if (!members.length) {
+      notify.error('Укажите хотя бы одного участника')
+      return
+    }
+    for (const member of members) {
+      const memberError = validateEmail(member, 'Участник')
+      if (memberError) {
+        notify.error(memberError)
+        return
+      }
+    }
+    try {
+      await api.createGroup({ address: address.trim(), members })
+      setAddress('')
+      setMembersInput('')
+      notify.success('Группа создана')
+      await load()
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
+  }
+
+  async function removeGroup(addr: string) {
+    if (!confirm(`Удалить группу ${addr}?`)) return
+    try {
+      await api.deleteGroup(addr)
+      if (selectedGroup === addr) setSelectedGroup('')
+      notify.success('Группа удалена')
+      await load()
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
+  }
+
+  async function addMember() {
+    if (!selectedGroup) {
+      notify.error('Выберите группу')
+      return
+    }
+    const memberError = validateEmail(newMember, 'Участник')
+    if (memberError) {
+      notify.error(memberError)
+      return
+    }
+    try {
+      await api.addGroupMember(selectedGroup, newMember.trim())
+      setNewMember('')
+      notify.success('Участник добавлен')
+      await load()
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
+  }
+
+  async function removeMember(groupAddress: string, member: string) {
+    if (!confirm(`Убрать ${member} из группы ${groupAddress}?`)) return
+    try {
+      await api.removeGroupMember(groupAddress, member)
+      notify.success('Участник удалён из группы')
+      await load()
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
+  }
+
+  const selected = items.find((group) => group.address === selectedGroup)
+
+  return (
+    <div>
+      <div className="topbar"><h2>Группы</h2></div>
+
+      <div className="card">
+        <h3>Групповые адреса</h3>
+        <p className="muted">
+          Группа — общий адрес без ящика. Письмо на группу доставляется всем участникам
+          (например, it@example.ru → u1@example.ru, u2@example.ru).
+        </p>
+        {canWrite && (
+          <>
+            <div className="form-row">
+              <input
+                placeholder="it@example.ru"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+              />
+            </div>
+            <div className="form-row">
+              <textarea
+                placeholder="Участники: u1@example.ru, u2@example.ru (через запятую или с новой строки)"
+                value={membersInput}
+                onChange={(e) => setMembersInput(e.target.value)}
+                rows={3}
+                style={{ flex: 1, minWidth: 280 }}
+              />
+              <button onClick={create}>Создать группу</button>
+            </div>
+          </>
+        )}
+        <table>
+          <thead>
+            <tr>
+              <th>Адрес группы</th>
+              <th>Участники</th>
+              {canWrite && <th></th>}
+            </tr>
+          </thead>
+          <tbody>
+            {items.length === 0 && (
+              <tr><td colSpan={canWrite ? 3 : 2} className="muted">Групп нет</td></tr>
+            )}
+            {items.map((group) => (
+              <tr key={group.address}>
+                <td>{group.address}</td>
+                <td>{group.members || '—'}</td>
+                {canWrite && (
+                  <td className="actions">
+                    <button className="secondary" onClick={() => setSelectedGroup(group.address)}>Управлять</button>
+                    <button className="danger" onClick={() => removeGroup(group.address)}>Удалить</button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {canWrite && items.length > 0 && (
+        <div className="card">
+          <h3>Участники группы</h3>
+          <div className="form-row" style={{ marginBottom: 16 }}>
+            <select value={selectedGroup} onChange={(e) => setSelectedGroup(e.target.value)}>
+              {items.map((group) => (
+                <option key={group.address} value={group.address}>{group.address}</option>
+              ))}
+            </select>
+            <select value={newMember} onChange={(e) => setNewMember(e.target.value)}>
+              <option value="">Выберите ящик…</option>
+              {mailboxes.map((mailbox) => (
+                <option key={mailbox.username} value={mailbox.username}>{mailbox.username}</option>
+              ))}
+            </select>
+            <input
+              placeholder="или введите email"
+              value={newMember}
+              onChange={(e) => setNewMember(e.target.value)}
+            />
+            <button onClick={addMember} disabled={!selectedGroup}>Добавить</button>
+          </div>
+          {selected ? (
+            <table>
+              <thead><tr><th>Участник</th><th></th></tr></thead>
+              <tbody>
+                {(selected.members || '').split(',').map((item) => item.trim()).filter(Boolean).map((member) => (
+                  <tr key={member}>
+                    <td>{member}</td>
+                    <td>
+                      <button className="danger" onClick={() => removeMember(selected.address, member)}>
+                        Убрать
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="muted">Выберите группу</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}

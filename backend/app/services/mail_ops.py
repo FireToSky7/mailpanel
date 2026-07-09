@@ -215,6 +215,9 @@ def _dest_domain(email: str) -> str:
 
 
 def list_aliases(domain: str | None = None) -> list[dict[str, Any]]:
+    from app.services import group_ops
+
+    group_addrs = group_ops._group_addresses(domain)
     query = (
         "SELECT a.address, "
         "GROUP_CONCAT(f.forwarding ORDER BY f.forwarding SEPARATOR ', ') AS goto, "
@@ -228,7 +231,10 @@ def list_aliases(domain: str | None = None) -> list[dict[str, Any]]:
         params = (domain.lower(),)
     query += " GROUP BY a.address, a.domain, a.active ORDER BY a.address"
     with vmail_conn() as conn:
-        return fetch_all(conn, query, params)
+        rows = fetch_all(conn, query, params)
+    if not group_addrs:
+        return rows
+    return [row for row in rows if row["address"].lower() not in group_addrs]
 
 
 def create_alias(address: str, goto: str) -> None:

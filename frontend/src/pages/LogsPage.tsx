@@ -33,9 +33,16 @@ export default function LogsPage() {
   const [trace, setTrace] = useState<LogEntry[]>([])
   const [traceId, setTraceId] = useState('')
   const [audit, setAudit] = useState<any[]>([])
+  const [searching, setSearching] = useState(false)
+  const [hasSearched, setHasSearched] = useState(false)
   const logBoxRef = useRef<HTMLPreElement>(null)
 
   async function search() {
+    if (!q.trim() && !queueId.trim() && !mailFrom.trim() && !mailTo.trim()) {
+      notify.error('Укажите отправителя, получателя, Queue-ID или текст для поиска')
+      return
+    }
+    setSearching(true)
     try {
       const params = new URLSearchParams()
       if (q.trim()) params.set('q', q.trim())
@@ -50,8 +57,11 @@ export default function LogsPage() {
       setSourceLabel(res.source_label || '')
       setTrace([])
       setTraceId('')
+      setHasSearched(true)
     } catch (e) {
       notify.error(errorMessage(e))
+    } finally {
+      setSearching(false)
     }
   }
 
@@ -103,6 +113,12 @@ export default function LogsPage() {
           Клик по Queue-ID — полная история письма.
           {sourceLabel && <> Источник: <strong>{sourceLabel}</strong>.</>}
         </p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            search()
+          }}
+        >
         <div className="form-row">
           <input placeholder="Текст в сообщении" value={q} onChange={(e) => setQ(e.target.value)} />
           <input placeholder="Queue-ID" value={queueId} onChange={(e) => setQueueId(e.target.value)} />
@@ -120,8 +136,8 @@ export default function LogsPage() {
             По
             <input type="datetime-local" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </label>
-          <button onClick={search}>Найти</button>
-          <button className="secondary" onClick={() => {
+          <button type="submit" disabled={searching}>{searching ? 'Поиск…' : 'Найти'}</button>
+          <button type="button" className="secondary" onClick={() => {
             setQ('')
             setQueueId('')
             setMailFrom('')
@@ -132,8 +148,10 @@ export default function LogsPage() {
             setTraceId('')
             setItems([])
             setTotal(0)
+            setHasSearched(false)
           }}>Сбросить</button>
         </div>
+        </form>
         <p className="muted">Найдено: {total}</p>
         <table className="data-table">
           <thead>
@@ -149,7 +167,9 @@ export default function LogsPage() {
           </thead>
           <tbody>
             {items.length === 0 && (
-              <tr><td colSpan={7} className="muted">Укажите отправителя, получателя или Queue-ID и нажмите «Найти»</td></tr>
+              <tr><td colSpan={7} className="muted">
+                {hasSearched ? 'За указанный период записей не найдено' : 'Укажите отправителя, получателя или Queue-ID и нажмите «Найти»'}
+              </td></tr>
             )}
             {items.map((row) => (
               <tr key={row.id}>

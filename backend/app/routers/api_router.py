@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.auth import PanelUser, Role, client_ip, get_current_user, require_permission, write_audit
 from app.config import get_config, role_has_permission
-from app.services import amavis_policy, iredapd, log_reader, mail_ops
+from app.services import amavis_policy, group_ops, iredapd, log_reader, mail_ops
 from app.services.amavis_policy import AmavisPolicyError
 from app.services.iredapd import IredapdError
 from app.services import mail_journal_search, postfix_diagnostics, postfix_queue, quarantine_ops
@@ -65,6 +65,30 @@ class AliasCreate(BaseModel):
     @classmethod
     def check_goto(cls, value: str) -> str:
         return normalize_email(value, "Пересылка на")
+
+
+class GroupCreate(BaseModel):
+    address: str
+    members: list[str] = Field(min_length=1)
+
+    @field_validator("address")
+    @classmethod
+    def check_address(cls, value: str) -> str:
+        return normalize_email(value, "Адрес группы")
+
+    @field_validator("members")
+    @classmethod
+    def check_members(cls, values: list[str]) -> list[str]:
+        return [normalize_email(item, "Участник") for item in values]
+
+
+class GroupMemberRequest(BaseModel):
+    member: str
+
+    @field_validator("member")
+    @classmethod
+    def check_member(cls, value: str) -> str:
+        return normalize_email(value, "Участник")
 
 
 class ForwardingUpdate(BaseModel):
@@ -269,6 +293,8 @@ def post_alias(payload: AliasCreate, request: Request, user: PanelUser = Depends
     if not payload.address.endswith(f"@{domain}"):
         raise HTTPException(400, f"Алиас должен быть в домене @{domain}")
     try:
+        if group_ops.is_group_address(payload.address):
+            raise ValueError("Этот адрес уже используется как группа")
         mail_ops.create_alias(payload.address, payload.goto)
         _audit(user, request, "create", "alias", payload.address)
     except ValueError as exc:
@@ -280,9 +306,77 @@ def post_alias(payload: AliasCreate, request: Request, user: PanelUser = Depends
 
 @router.delete("/aliases/{address:path}", dependencies=[Depends(require_permission("mail.write"))])
 def del_alias(address: str, request: Request, user: PanelUser = Depends(require_permission("mail.write"))):
+    if group_ops.is_group_address(address):
+        raise HTTPException(400, "Это групповой адрес — удаляйте в разделе «Группы»")
     mail_ops.delete_alias(address)
     _audit(user, request, "delete", "alias", address)
     return {"ok": True}
+
+
+@router.get("/groups", dependencies=[Depends(require_permission("mail.read"))])
+def get_groups():
+    return group_ops.list_groups(get_config().panel.mail_domain)
+
+
+@router.post("/groups", dependencies=[Depends(require_permission("mail.write"))])
+def post_group(payload: GroupCreate, request: Request, user: PanelUser = Depends(require_permission("mail.write"))):
+    domain = get_config().panel.mail_domain.lower()
+    if not payload.address.endswith(f"@{domain}"):
+        raise HTTPException(400, f"Группа должна быть в домене @{domain}")
+    for member in payload.members:
+        if not member.endswith(f"@{domain}"):
+            raise HTTPException(400, f"Участник должен быть в домене @{domain}: {member}")
+    try:
+        group_ops.create_group(payload.address, payload.members)
+        _audit(user, request, "create", "group", f"{payload.address} -> {', '.join(payload.members)}")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, f"Не удалось создать группу: {exc}") from exc
+    return {"ok": True}
+
+
+@router.delete("/groups/{address:path}", dependencies=[Depends(require_permission("mail.write"))])
+def del_group(address: str, request: Request, user: PanelUser = Depends(require_permission("mail.write"))):
+    try:
+        group_ops.delete_group(address)
+        _audit(user, request, "delete", "group", address)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True}
+
+
+@router.post("/groups/{address:path}/members", dependencies=[Depends(require_permission("mail.write"))])
+def add_group_member(
+    address: str,
+    payload: GroupMemberRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("mail.write")),
+):
+    domain = get_config().panel.mail_domain.lower()
+    if not payload.member.endswith(f"@{domain}"):
+        raise HTTPException(400, f"Участник должен быть в домене @{domain}")
+    try:
+        members = group_ops.add_group_member(address, payload.member)
+        _audit(user, request, "group_add_member", "group", f"{address} + {payload.member}")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "members": members}
+
+
+@router.post("/groups/{address:path}/members/remove", dependencies=[Depends(require_permission("mail.write"))])
+def remove_group_member(
+    address: str,
+    payload: GroupMemberRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("mail.write")),
+):
+    try:
+        members = group_ops.remove_group_member(address, payload.member)
+        _audit(user, request, "group_remove_member", "group", f"{address} - {payload.member}")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "members": members}
 
 
 @router.get("/wblist/{list_type}", dependencies=[Depends(require_permission("antispam.read"))])

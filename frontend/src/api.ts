@@ -33,6 +33,13 @@ export type Alias = {
   active: number
 }
 
+export type MailGroup = {
+  address: string
+  members: string
+  domain: string
+  active: number
+}
+
 export type ServiceStatus = {
   name: string
   status: string
@@ -274,6 +281,21 @@ export const api = {
   createAlias: (body: object) => request<{ ok: boolean }>('/api/aliases', { method: 'POST', body: JSON.stringify(body) }),
   deleteAlias: (address: string) =>
     request<{ ok: boolean }>(`/api/aliases/${encodeURIComponent(address)}`, { method: 'DELETE' }),
+  groups: () => request<MailGroup[]>('/api/groups'),
+  createGroup: (body: { address: string; members: string[] }) =>
+    request<{ ok: boolean }>('/api/groups', { method: 'POST', body: JSON.stringify(body) }),
+  deleteGroup: (address: string) =>
+    request<{ ok: boolean }>(`/api/groups/${encodeURIComponent(address)}`, { method: 'DELETE' }),
+  addGroupMember: (address: string, member: string) =>
+    request<{ ok: boolean; members: string[] }>(`/api/groups/${encodeURIComponent(address)}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ member }),
+    }),
+  removeGroupMember: (address: string, member: string) =>
+    request<{ ok: boolean; members: string[] }>(
+      `/api/groups/${encodeURIComponent(address)}/members/remove`,
+      { method: 'POST', body: JSON.stringify({ member }) },
+    ),
   wblist: (type: string) => request<{ entries: string[] }>(`/api/wblist/${type}`),
   addWblist: (type: string, entries: string[]) =>
     request<{ ok: boolean }>(`/api/wblist/${type}`, { method: 'POST', body: JSON.stringify({ entries }) }),
@@ -357,6 +379,7 @@ export function canAccess(role: string, section: string): boolean {
     dashboard: ['superadmin', 'admin', 'viewer'],
     mailboxes: ['superadmin', 'admin', 'viewer'],
     aliases: ['superadmin', 'admin', 'viewer'],
+    groups: ['superadmin', 'admin', 'viewer'],
     antispam: ['superadmin', 'admin', 'viewer'],
     quarantine: ['superadmin', 'admin', 'viewer'],
     queue: ['superadmin', 'admin'],

@@ -42,3 +42,8 @@ CREATE TABLE IF NOT EXISTS mail_log_entries (
     INDEX idx_mail_from (mail_from),
     INDEX idx_mail_to (mail_to)
 );
+
+CREATE TABLE IF NOT EXISTS mail_groups (
+    address VARCHAR(255) PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
