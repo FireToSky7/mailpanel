@@ -15,6 +15,10 @@ export default function LogsPage() {
   const [total, setTotal] = useState(0)
   const [q, setQ] = useState('')
   const [queueId, setQueueId] = useState('')
+  const [mailFrom, setMailFrom] = useState('')
+  const [mailTo, setMailTo] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [live, setLive] = useState('')
   const [liveSource, setLiveSource] = useState('')
   const [liveType, setLiveType] = useState<string | null>(null)
@@ -26,8 +30,12 @@ export default function LogsPage() {
   async function search() {
     try {
       const params = new URLSearchParams()
-      if (q) params.set('q', q)
-      if (queueId) params.set('queue_id', queueId)
+      if (q.trim()) params.set('q', q.trim())
+      if (queueId.trim()) params.set('queue_id', queueId.trim())
+      if (mailFrom.trim()) params.set('mail_from', mailFrom.trim())
+      if (mailTo.trim()) params.set('mail_to', mailTo.trim())
+      if (dateFrom) params.set('date_from', dateFrom)
+      if (dateTo) params.set('date_to', dateTo)
       const res: any = await api.logsSearch(params)
       setItems(res.items)
       setTotal(res.total)
@@ -68,11 +76,34 @@ export default function LogsPage() {
       <div className="topbar"><h2>Логи</h2></div>
       <div className="card">
         <h3>Поиск по индексу</h3>
-        <p className="muted">Индекс собирается из файлов логов. Если /var/log/maillog не обновляется, используйте «Живой лог» ниже.</p>
+        <p className="muted">Все указанные поля работают вместе (логическое «И»). Индекс собирается из файлов логов — для свежих записей используйте «Живой лог» ниже.</p>
         <div className="form-row">
-          <input placeholder="Текст" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input placeholder="Текст в сообщении" value={q} onChange={(e) => setQ(e.target.value)} />
           <input placeholder="Queue-ID" value={queueId} onChange={(e) => setQueueId(e.target.value)} />
+        </div>
+        <div className="form-row">
+          <input placeholder="Отправитель" value={mailFrom} onChange={(e) => setMailFrom(e.target.value)} />
+          <input placeholder="Получатель" value={mailTo} onChange={(e) => setMailTo(e.target.value)} />
+        </div>
+        <div className="form-row">
+          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            С
+            <input type="datetime-local" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          </label>
+          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            По
+            <input type="datetime-local" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </label>
           <button onClick={search}>Найти</button>
+          <button className="secondary" onClick={() => {
+            setQ('')
+            setQueueId('')
+            setMailFrom('')
+            setMailTo('')
+            setDateFrom('')
+            setDateTo('')
+            setTrace([])
+          }}>Сбросить</button>
           <button className="secondary" onClick={async () => {
             if (!queueId) return
             try {

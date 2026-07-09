@@ -553,6 +553,8 @@ def search_logs(
     queue_id: str | None = None,
     mail_from: str | None = None,
     mail_to: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -563,16 +565,30 @@ def search_logs(
         params.append(service)
     if queue_id:
         conditions.append("queue_id = %s")
-        params.append(queue_id)
+        params.append(queue_id.strip())
     if mail_from:
         conditions.append("mail_from LIKE %s")
-        params.append(f"%{mail_from}%")
+        params.append(f"%{mail_from.strip()}%")
     if mail_to:
         conditions.append("mail_to LIKE %s")
-        params.append(f"%{mail_to}%")
+        params.append(f"%{mail_to.strip()}%")
     if query:
         conditions.append("message LIKE %s")
-        params.append(f"%{query}%")
+        params.append(f"%{query.strip()}%")
+    if date_from:
+        normalized = date_from.strip().replace("T", " ")
+        if len(normalized) == 10:
+            normalized += " 00:00:00"
+        conditions.append("logged_at >= %s")
+        params.append(normalized)
+    if date_to:
+        normalized = date_to.strip().replace("T", " ")
+        if len(normalized) == 10:
+            normalized += " 23:59:59"
+        elif len(normalized) == 16:
+            normalized += ":59"
+        conditions.append("logged_at <= %s")
+        params.append(normalized)
     where = " AND ".join(conditions)
     with panel_conn() as conn:
         total = fetch_all(conn, f"SELECT COUNT(*) AS cnt FROM mail_log_entries WHERE {where}", tuple(params))[0]["cnt"]

@@ -78,7 +78,6 @@ class ForwardingRemove(BaseModel):
 
 class WblistRequest(BaseModel):
     entries: list[str] = Field(min_length=1)
-    account: str | None = None
 
 
 class GreylistRequest(BaseModel):
@@ -287,14 +286,11 @@ def del_alias(address: str, request: Request, user: PanelUser = Depends(require_
 
 
 @router.get("/wblist/{list_type}", dependencies=[Depends(require_permission("antispam.read"))])
-def get_wblist(
-    list_type: str,
-    account: str | None = None,
-):
+def get_wblist(list_type: str):
     if list_type not in ("whitelist", "blacklist"):
         raise HTTPException(400, "Invalid list type")
     try:
-        entries = iredapd.list_wblist(list_type, account)
+        entries = iredapd.list_wblist(list_type, None)
     except IredapdError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"entries": entries}
@@ -309,12 +305,11 @@ def post_wblist(
 ):
     if list_type not in ("whitelist", "blacklist"):
         raise HTTPException(400, "Invalid list type")
-    account = payload.account
     if not payload.entries or not any(item.strip() for item in payload.entries):
         raise HTTPException(400, "Укажите запись для добавления в список")
     try:
         validated = [iredapd.validate_wblist_entry(e) for e in payload.entries]
-        iredapd.add_wblist(list_type, validated, account)
+        iredapd.add_wblist(list_type, validated, None)
         _audit(user, request, "wblist_add", list_type, ", ".join(validated))
     except IredapdError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -340,10 +335,9 @@ def delete_wblist(
 ):
     if list_type not in ("whitelist", "blacklist"):
         raise HTTPException(400, "Invalid list type")
-    account = payload.account
     try:
         validated = [iredapd.validate_wblist_entry(e) for e in payload.entries]
-        iredapd.delete_wblist(list_type, validated, account)
+        iredapd.delete_wblist(list_type, validated, None)
         _audit(user, request, "wblist_delete", list_type, ", ".join(validated))
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -641,10 +635,14 @@ def logs_search(
     queue_id: str | None = None,
     mail_from: str | None = None,
     mail_to: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     limit: int = 200,
     offset: int = 0,
 ):
-    return mail_ops.search_logs(service, q, queue_id, mail_from, mail_to, limit, offset)
+    return mail_ops.search_logs(
+        service, q, queue_id, mail_from, mail_to, date_from, date_to, limit, offset
+    )
 
 
 @router.get("/logs/trace/{queue_id}", dependencies=[Depends(require_permission("logs.read"))])

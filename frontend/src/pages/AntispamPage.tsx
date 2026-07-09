@@ -24,7 +24,6 @@ export default function AntispamPage() {
   const [blacklist, setBlacklist] = useState<string[]>([])
   const [whitelistEntry, setWhitelistEntry] = useState('')
   const [blacklistEntry, setBlacklistEntry] = useState('')
-  const [account, setAccount] = useState('')
   const [score, setScore] = useState('5.0')
   const [grey, setGrey] = useState<GreylistingData | null>(null)
   const [bannedExtensions, setBannedExtensions] = useState<string[]>([])
@@ -38,7 +37,7 @@ export default function AntispamPage() {
     const errors: string[] = []
 
     try {
-      const wl = await api.wblist('whitelist', account || undefined)
+      const wl = await api.wblist('whitelist')
       setWhitelist(wl.entries)
     } catch (e) {
       errors.push(`Белый список: ${errorMessage(e)}`)
@@ -46,7 +45,7 @@ export default function AntispamPage() {
     }
 
     try {
-      const bl = await api.wblist('blacklist', account || undefined)
+      const bl = await api.wblist('blacklist')
       setBlacklist(bl.entries)
     } catch (e) {
       errors.push(`Чёрный список: ${errorMessage(e)}`)
@@ -96,7 +95,7 @@ export default function AntispamPage() {
       return
     }
     try {
-      await api.addWblist(type, [value], account || undefined)
+      await api.addWblist(type, [value])
       clear()
       notify.success('Запись добавлена')
       await load()
@@ -107,7 +106,7 @@ export default function AntispamPage() {
 
   async function removeFromList(type: 'whitelist' | 'blacklist', entry: string) {
     try {
-      await api.deleteWblist(type, [entry], account || undefined)
+      await api.deleteWblist(type, [entry])
       notify.success('Запись удалена')
       await load()
     } catch (e) {
@@ -242,15 +241,7 @@ export default function AntispamPage() {
       )}
       <div className="card">
         <h3>Белый список</h3>
-        <div className="form-row" style={{ marginBottom: 10 }}>
-          <input
-            placeholder="Аккаунт (пусто = глобально)"
-            value={account}
-            onChange={(e) => setAccount(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          <button className="secondary" onClick={() => load()}>Применить</button>
-        </div>
+        <p className="muted">Глобальный список для всего сервера: email, домен (@domain.ru) или IP.</p>
         <div className="form-row">
           <input placeholder="email / @domain.ru / IP" value={whitelistEntry} onChange={(e) => setWhitelistEntry(e.target.value)} />
           {canWrite && <button onClick={() => addToList('whitelist', whitelistEntry, () => setWhitelistEntry(''))}>Добавить</button>}

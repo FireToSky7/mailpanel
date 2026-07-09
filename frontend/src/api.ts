@@ -271,12 +271,11 @@ export const api = {
   createAlias: (body: object) => request<{ ok: boolean }>('/api/aliases', { method: 'POST', body: JSON.stringify(body) }),
   deleteAlias: (address: string) =>
     request<{ ok: boolean }>(`/api/aliases/${encodeURIComponent(address)}`, { method: 'DELETE' }),
-  wblist: (type: string, account?: string) =>
-    request<{ entries: string[] }>(`/api/wblist/${type}${account ? `?account=${encodeURIComponent(account)}` : ''}`),
-  addWblist: (type: string, entries: string[], account?: string) =>
-    request<{ ok: boolean }>(`/api/wblist/${type}`, { method: 'POST', body: JSON.stringify({ entries, account }) }),
-  deleteWblist: (type: string, entries: string[], account?: string) =>
-    request<{ ok: boolean }>(`/api/wblist/${type}`, { method: 'DELETE', body: JSON.stringify({ entries, account }) }),
+  wblist: (type: string) => request<{ entries: string[] }>(`/api/wblist/${type}`),
+  addWblist: (type: string, entries: string[]) =>
+    request<{ ok: boolean }>(`/api/wblist/${type}`, { method: 'POST', body: JSON.stringify({ entries }) }),
+  deleteWblist: (type: string, entries: string[]) =>
+    request<{ ok: boolean }>(`/api/wblist/${type}`, { method: 'DELETE', body: JSON.stringify({ entries }) }),
   spam: () => request<SpamConfig>('/api/spam'),
   updateSpam: (body: object) => request<{ ok: boolean }>('/api/spam', { method: 'PUT', body: JSON.stringify(body) }),
   bannedExtensions: () => request<BannedExtensionsData>('/api/antispam/banned-extensions'),
