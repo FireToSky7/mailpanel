@@ -229,6 +229,11 @@ def get_aliases():
     return mail_ops.list_aliases(get_config().panel.mail_domain)
 
 
+@router.get("/forwardings", dependencies=[Depends(require_permission("mail.read"))])
+def get_forwardings():
+    return mail_ops.list_mailbox_forwardings(get_config().panel.mail_domain)
+
+
 @router.post("/aliases", dependencies=[Depends(require_permission("mail.write"))])
 def post_alias(payload: AliasCreate, request: Request, user: PanelUser = Depends(require_permission("mail.write"))):
     domain = get_config().panel.mail_domain.lower()
@@ -286,7 +291,13 @@ def post_wblist(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(400, f"Не удалось добавить в список: {exc}") from exc
+        message = str(exc)
+        if "1062" in message or "Duplicate entry" in message:
+            raise HTTPException(
+                400,
+                "Этот адрес уже есть в другом списке (белом или чёрном). Удалите его оттуда и попробуйте снова.",
+            ) from exc
+        raise HTTPException(400, f"Не удалось добавить в список: {message}") from exc
     return {"ok": True}
 
 

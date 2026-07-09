@@ -31,7 +31,12 @@ function translateMsg(msg: string): string {
 
 export function formatApiError(detail: unknown): string {
   if (!detail) return 'Ошибка запроса'
-  if (typeof detail === 'string') return detail
+  if (typeof detail === 'string') {
+    if (detail.includes('1062') || detail.includes('Duplicate entry')) {
+      return 'Этот адрес уже есть в другом списке (белом или чёрном). Удалите его оттуда и попробуйте снова.'
+    }
+    return detail
+  }
   if (Array.isArray(detail)) {
     const lines = detail.map((item) => {
       if (typeof item === 'string') return item

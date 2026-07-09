@@ -19,7 +19,11 @@ export type Mailbox = {
   used_mb?: number
   bytes_used?: number
   messages?: number
-  forwarding_to?: string | null
+}
+
+export type ForwardingEntry = {
+  address: string
+  goto: string
 }
 
 export type Alias = {
@@ -239,6 +243,7 @@ export const api = {
     }),
   clearMailboxForwarding: (username: string) =>
     request<{ ok: boolean }>(`/api/mailboxes/${encodeURIComponent(username)}/forwarding`, { method: 'DELETE' }),
+  forwardings: () => request<ForwardingEntry[]>('/api/forwardings'),
   aliases: () => request<Alias[]>('/api/aliases'),
   createAlias: (body: object) => request<{ ok: boolean }>('/api/aliases', { method: 'POST', body: JSON.stringify(body) }),
   deleteAlias: (address: string) =>

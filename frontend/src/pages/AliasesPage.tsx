@@ -1,17 +1,31 @@
 import { useEffect, useState } from 'react'
-import { api, getUser } from '../api'
+import { api, getUser, type ForwardingEntry, type Mailbox } from '../api'
 import { errorMessage, validateEmail } from '../errors'
 import { notify } from '../notify'
 
 export default function AliasesPage() {
   const [items, setItems] = useState<any[]>([])
+  const [forwardings, setForwardings] = useState<ForwardingEntry[]>([])
+  const [mailboxes, setMailboxes] = useState<Mailbox[]>([])
   const [address, setAddress] = useState('')
   const [goto, setGoto] = useState('')
+  const [fwdMailbox, setFwdMailbox] = useState('')
+  const [fwdTarget, setFwdTarget] = useState('')
   const role = getUser()?.role
   const canWrite = role === 'superadmin' || role === 'admin'
 
   async function load() {
-    setItems(await api.aliases())
+    const [aliases, fwd, boxes] = await Promise.all([
+      api.aliases(),
+      api.forwardings(),
+      api.mailboxes(),
+    ])
+    setItems(aliases)
+    setForwardings(fwd)
+    setMailboxes(boxes)
+    if (!fwdMailbox && boxes.length) {
+      setFwdMailbox(boxes[0].username)
+    }
   }
 
   useEffect(() => {
@@ -47,27 +61,132 @@ export default function AliasesPage() {
     }
   }
 
+  async function saveForwarding() {
+    if (!fwdMailbox) {
+      notify.error('Выберите ящик')
+      return
+    }
+    const targetError = validateEmail(fwdTarget, 'Пересылка на')
+    if (targetError) {
+      notify.error(targetError)
+      return
+    }
+    const target = fwdTarget.trim()
+    try {
+      await api.setMailboxForwarding(fwdMailbox, target)
+      setFwdTarget('')
+      notify.success(`Пересылка настроена: ${fwdMailbox} → ${target}`)
+      await load()
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
+  }
+
+  async function editForwarding(address: string, current: string) {
+    const raw = prompt(
+      `Пересылка для ${address}\nУкажите адрес получателя или оставьте пустым, чтобы отключить.`,
+      current,
+    )
+    if (raw === null) return
+    const target = raw.trim()
+    try {
+      if (!target) {
+        await api.clearMailboxForwarding(address)
+        notify.success('Пересылка отключена')
+      } else {
+        const emailError = validateEmail(target, 'Пересылка на')
+        if (emailError) {
+          notify.error(emailError)
+          return
+        }
+        await api.setMailboxForwarding(address, target)
+        notify.success(`Пересылка настроена: ${address} → ${target}`)
+      }
+      await load()
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
+  }
+
+  async function removeForwarding(address: string) {
+    if (!confirm(`Отключить пересылку для ${address}?`)) return
+    try {
+      await api.clearMailboxForwarding(address)
+      notify.success('Пересылка отключена')
+      await load()
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
+  }
+
   return (
     <div>
       <div className="topbar"><h2>Алиасы и пересылка</h2></div>
-      {canWrite && (
-        <div className="card">
-          <div className="form-row">
-            <input placeholder="alias@domain.ru" value={address} onChange={(e) => setAddress(e.target.value)} />
-            <input placeholder="target@domain.ru" value={goto} onChange={(e) => setGoto(e.target.value)} />
-            <button onClick={create}>Добавить</button>
-          </div>
-          <p className="muted">Алиас — отдельный адрес без ящика; письма уходят на существующий ящик в вашем домене.</p>
-        </div>
-      )}
+
       <div className="card">
+        <h3>Алиасы</h3>
+        {canWrite && (
+          <>
+            <div className="form-row">
+              <input placeholder="alias@domain.ru" value={address} onChange={(e) => setAddress(e.target.value)} />
+              <input placeholder="target@domain.ru" value={goto} onChange={(e) => setGoto(e.target.value)} />
+              <button onClick={create}>Добавить алиас</button>
+            </div>
+            <p className="muted">Алиас — отдельный адрес без ящика; письма уходят на существующий ящик в вашем домене.</p>
+          </>
+        )}
         <table>
           <thead><tr><th>Адрес</th><th>Пересылка на</th>{canWrite && <th></th>}</tr></thead>
           <tbody>
+            {items.length === 0 && (
+              <tr><td colSpan={canWrite ? 3 : 2} className="muted">Алиасов нет</td></tr>
+            )}
             {items.map((a) => (
               <tr key={a.address}>
                 <td>{a.address}</td><td>{a.goto || '—'}</td>
                 {canWrite && <td><button className="danger" onClick={() => remove(a.address)}>Удалить</button></td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="card">
+        <h3>Пересылка ящиков</h3>
+        <p className="muted">
+          Копия входящей почты уходит на другой адрес. Оригинал остаётся в ящике, если не настроено иначе на сервере.
+        </p>
+        {canWrite && (
+          <div className="form-row" style={{ marginBottom: 16 }}>
+            <select value={fwdMailbox} onChange={(e) => setFwdMailbox(e.target.value)}>
+              {mailboxes.map((m) => (
+                <option key={m.username} value={m.username}>{m.username}</option>
+              ))}
+            </select>
+            <input
+              placeholder="куда пересылать (user@domain.ru)"
+              value={fwdTarget}
+              onChange={(e) => setFwdTarget(e.target.value)}
+            />
+            <button onClick={saveForwarding}>Настроить</button>
+          </div>
+        )}
+        <table>
+          <thead><tr><th>Ящик</th><th>Пересылка на</th>{canWrite && <th></th>}</tr></thead>
+          <tbody>
+            {forwardings.length === 0 && (
+              <tr><td colSpan={canWrite ? 3 : 2} className="muted">Пересылка не настроена</td></tr>
+            )}
+            {forwardings.map((f) => (
+              <tr key={f.address}>
+                <td>{f.address}</td>
+                <td>{f.goto}</td>
+                {canWrite && (
+                  <td className="actions">
+                    <button className="secondary" onClick={() => editForwarding(f.address, f.goto)}>Изменить</button>
+                    <button className="danger" onClick={() => removeForwarding(f.address)}>Отключить</button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

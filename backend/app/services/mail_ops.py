@@ -122,10 +122,7 @@ def mailbox_exists(username: str) -> bool:
 def list_mailboxes(domain: str | None = None) -> list[dict[str, Any]]:
     query = (
         "SELECT m.username, m.name, m.domain, m.quota, m.active, m.created, m.modified, "
-        "COALESCE(u.bytes, 0) AS bytes_used, COALESCE(u.messages, 0) AS messages, "
-        "(SELECT GROUP_CONCAT(f.forwarding ORDER BY f.forwarding SEPARATOR ', ') "
-        " FROM forwardings f WHERE f.address = m.username AND f.is_forwarding = 1 "
-        " AND f.forwarding != m.username) AS forwarding_to "
+        "COALESCE(u.bytes, 0) AS bytes_used, COALESCE(u.messages, 0) AS messages "
         "FROM mailbox m "
         "LEFT JOIN used_quota u ON m.username = u.username"
     )
@@ -262,32 +259,75 @@ def delete_alias(address: str) -> None:
         execute(conn, "DELETE FROM alias WHERE address = %s", (address,))
 
 
+def _ensure_self_forwarding(conn, username: str) -> None:
+    domain = _dest_domain(username)
+    row = fetch_one(
+        conn,
+        "SELECT forwarding FROM forwardings WHERE address = %s AND LOWER(forwarding) = LOWER(%s) LIMIT 1",
+        (username, username),
+    )
+    if not row:
+        execute(
+            conn,
+            "INSERT INTO forwardings (address, forwarding, domain, dest_domain, is_forwarding, active) "
+            "VALUES (%s, %s, %s, %s, 1, 1)",
+            (username, username, domain, domain),
+        )
+
+
+def _mailbox_forward_targets(conn, username: str) -> list[str]:
+    rows = fetch_all(
+        conn,
+        "SELECT DISTINCT forwarding FROM forwardings "
+        "WHERE address = %s AND LOWER(forwarding) != LOWER(%s) "
+        "ORDER BY forwarding",
+        (username, username),
+    )
+    return [row["forwarding"] for row in rows]
+
+
+def list_mailbox_forwardings(domain: str | None = None) -> list[dict[str, Any]]:
+    query = (
+        "SELECT m.username AS address, "
+        "GROUP_CONCAT(DISTINCT f.forwarding ORDER BY f.forwarding SEPARATOR ', ') AS goto "
+        "FROM mailbox m "
+        "JOIN forwardings f ON f.address = m.username AND LOWER(f.forwarding) != LOWER(m.username) "
+    )
+    params: tuple[Any, ...] = ()
+    if domain:
+        query += " WHERE m.domain = %s"
+        params = (domain.lower(),)
+    query += " GROUP BY m.username ORDER BY m.username"
+    with vmail_conn() as conn:
+        rows = fetch_all(conn, query, params)
+    return [row for row in rows if row.get("goto")]
+
+
 def get_forwarding(username: str) -> str | None:
     username = username.lower()
     with vmail_conn() as conn:
-        rows = fetch_all(
-            conn,
-            "SELECT forwarding FROM forwardings "
-            "WHERE address = %s AND is_forwarding = 1 AND forwarding != %s "
-            "ORDER BY forwarding",
-            (username, username),
-        )
-    if not rows:
+        targets = _mailbox_forward_targets(conn, username)
+    if not targets:
         return None
-    return ", ".join(row["forwarding"] for row in rows)
+    return ", ".join(targets)
 
 
 def set_forwarding(username: str, goto: str) -> None:
     username = username.lower()
     goto = goto.lower()
+    if username == goto:
+        raise ValueError("Нельзя пересылать ящик сам на себя")
     domain = _dest_domain(username)
     dest_domain = _dest_domain(goto)
     with vmail_conn() as conn:
+        if not fetch_one(conn, "SELECT username FROM mailbox WHERE username = %s", (username,)):
+            raise ValueError(f"Ящик не найден: {username}")
         execute(
             conn,
-            "DELETE FROM forwardings WHERE address = %s AND is_forwarding = 1 AND forwarding != %s",
+            "DELETE FROM forwardings WHERE address = %s AND LOWER(forwarding) != LOWER(%s)",
             (username, username),
         )
+        _ensure_self_forwarding(conn, username)
         execute(
             conn,
             "INSERT INTO forwardings (address, forwarding, domain, dest_domain, is_forwarding, active) "
@@ -299,11 +339,32 @@ def set_forwarding(username: str, goto: str) -> None:
 def clear_forwarding(username: str) -> None:
     username = username.lower()
     with vmail_conn() as conn:
-        execute(
+        modified = fetch_all(
             conn,
-            "DELETE FROM forwardings WHERE address = %s AND is_forwarding = 1 AND forwarding != %s",
+            "SELECT forwarding FROM forwardings WHERE address = %s AND LOWER(forwarding) != LOWER(%s)",
             (username, username),
         )
+        if len(modified) == 1:
+            target = modified[0]["forwarding"]
+            self_row = fetch_one(
+                conn,
+                "SELECT forwarding FROM forwardings WHERE address = %s AND LOWER(forwarding) = LOWER(%s) LIMIT 1",
+                (username, username),
+            )
+            if not self_row:
+                execute(
+                    conn,
+                    "UPDATE forwardings SET forwarding = %s, dest_domain = %s, is_forwarding = 1, active = 1 "
+                    "WHERE address = %s AND forwarding = %s",
+                    (username, _dest_domain(username), username, target),
+                )
+                return
+        execute(
+            conn,
+            "DELETE FROM forwardings WHERE address = %s AND LOWER(forwarding) != LOWER(%s)",
+            (username, username),
+        )
+        _ensure_self_forwarding(conn, username)
 
 
 def dashboard_stats() -> dict[str, Any]:

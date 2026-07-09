@@ -122,6 +122,9 @@ def list_wblist(list_type: str, account: str | None = None) -> list[str]:
 
 def add_wblist(list_type: str, senders: list[str], account: str | None = None) -> None:
     wb_flag = "W" if list_type == "whitelist" else "B"
+    opposite_flag = "B" if wb_flag == "W" else "W"
+    opposite_label = "чёрном" if list_type == "whitelist" else "белом"
+    same_label = "белом" if list_type == "whitelist" else "чёрном"
     wb_account = normalize_wblist_account(account)
     normalized = [s.strip().lower() for s in senders if s.strip()]
     if not normalized:
@@ -133,11 +136,22 @@ def add_wblist(list_type: str, senders: list[str], account: str | None = None) -
             if not classify_address(sender):
                 raise ValueError(f"Некорректный адрес: {sender}")
             sender_id = _ensure_mailaddr(conn, sender)
-            execute(
+            opposite = fetch_one(
                 conn,
-                "DELETE FROM wblist WHERE rid = %s AND sid = %s AND wb = %s",
+                "SELECT 1 FROM wblist WHERE rid = %s AND sid = %s AND wb = %s LIMIT 1",
+                (user_id, sender_id, opposite_flag),
+            )
+            if opposite:
+                raise ValueError(
+                    f"«{sender}» уже в {opposite_label} списке. Сначала удалите запись оттуда."
+                )
+            existing = fetch_one(
+                conn,
+                "SELECT 1 FROM wblist WHERE rid = %s AND sid = %s AND wb = %s LIMIT 1",
                 (user_id, sender_id, wb_flag),
             )
+            if existing:
+                raise ValueError(f"«{sender}» уже в {same_label} списке.")
             execute(
                 conn,
                 "INSERT INTO wblist (rid, sid, wb) VALUES (%s, %s, %s)",

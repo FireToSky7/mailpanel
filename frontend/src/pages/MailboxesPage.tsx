@@ -113,32 +113,6 @@ export default function MailboxesPage() {
     }
   }
 
-  async function configureForwarding(u: string, current?: string | null) {
-    const raw = prompt(
-      `Пересылка для ${u}\nУкажите адрес получателя или оставьте пустым, чтобы отключить.`,
-      current || '',
-    )
-    if (raw === null) return
-    const goto = raw.trim()
-    try {
-      if (!goto) {
-        await api.clearMailboxForwarding(u)
-        notify.success('Пересылка отключена')
-      } else {
-        const emailError = validateEmail(goto, 'Пересылка на')
-        if (emailError) {
-          notify.error(emailError)
-          return
-        }
-        await api.setMailboxForwarding(u, goto)
-        notify.success(`Пересылка настроена: ${goto}`)
-      }
-      await load()
-    } catch (e) {
-      notify.error(errorMessage(e))
-    }
-  }
-
   return (
     <div>
       <div className="topbar"><h2>Почтовые ящики</h2></div>
@@ -154,6 +128,7 @@ export default function MailboxesPage() {
           </div>
           <p className="muted">
             Адрес ящика уникален. Пароль: мин. 8 символов, заглавная и строчная латинские буквы, цифра. Квота в мегабайтах (1024 = 1 ГБ).
+            Пересылку настраивайте во вкладке «Алиасы».
           </p>
         </div>
       )}
@@ -164,7 +139,6 @@ export default function MailboxesPage() {
               <th>Ящик</th>
               <th>Имя</th>
               <th>Занято / квота</th>
-              <th>Пересылка</th>
               <th>Активен</th>
               {canWrite && <th className="actions">Действия</th>}
             </tr>
@@ -175,11 +149,9 @@ export default function MailboxesPage() {
                 <td title={m.username}>{m.username}</td>
                 <td>{m.name}</td>
                 <td>{formatQuota(m.used_mb, m.quota)}</td>
-                <td title={m.forwarding_to || ''}>{m.forwarding_to || '—'}</td>
                 <td>{m.active ? 'да' : 'нет'}</td>
                 {canWrite && (
                   <td className="actions">
-                    <button className="secondary" onClick={() => configureForwarding(m.username, m.forwarding_to)}>Пересылка</button>
                     <button className="secondary" onClick={() => resetPassword(m.username)}>Пароль</button>
                     <button className="secondary" onClick={() => changeQuota(m.username, m.quota)}>Квота</button>
                     <button className="secondary" onClick={() => toggleActive(m.username, m.active)}>
