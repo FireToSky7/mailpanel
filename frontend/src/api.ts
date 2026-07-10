@@ -155,9 +155,45 @@ export type ForwardingInfo = {
   goto: string | null
 }
 
+export type GreylistingRule = {
+  action: string
+  from_addr: string
+  to_addr: string
+  priority?: string | null
+}
+
+export type GreylistingTiming = {
+  training_mode: boolean
+  rejection_message: string
+  block_expire_minutes: number
+  auth_triplet_expire_days: number
+  unauth_triplet_expire_days: number
+  bypass_spf: boolean
+  settings_file: string
+}
+
+export type GreylistingStats = {
+  hours: number
+  rejections: number
+  top_senders: { address: string; count: number }[]
+  recent: {
+    logged_at: string
+    service: string
+    mail_from: string | null
+    mail_to: string | null
+    client_ip: string | null
+    message: string
+  }[]
+}
+
 export type GreylistingData = {
-  settings: string
-  whitelist_domains: string
+  global_enabled: boolean
+  timing: GreylistingTiming
+  rules: GreylistingRule[]
+  whitelist_domains: string[]
+  whitelist_addresses: string[]
+  stats: GreylistingStats
+  notes: string[]
 }
 
 export type QuarantineItem = {
@@ -362,6 +398,35 @@ export const api = {
       { method: 'POST' },
     ),
   greylisting: () => request<GreylistingData>('/api/greylisting'),
+  greylistingStats: (hours = 24) =>
+    request<GreylistingStats>(`/api/greylisting/stats?hours=${hours}`),
+  greylistingDisable: (to_addr: string, from_addr?: string) =>
+    request<{ ok: boolean }>('/api/greylisting/disable', {
+      method: 'POST',
+      body: JSON.stringify({ to_addr, from_addr: from_addr || null }),
+    }),
+  greylistingEnable: (to_addr: string, from_addr?: string) =>
+    request<{ ok: boolean }>('/api/greylisting/enable', {
+      method: 'POST',
+      body: JSON.stringify({ to_addr, from_addr: from_addr || null }),
+    }),
+  greylistingDeleteRule: (to_addr: string, from_addr?: string) =>
+    request<{ ok: boolean }>('/api/greylisting/delete-rule', {
+      method: 'POST',
+      body: JSON.stringify({ to_addr, from_addr: from_addr || null }),
+    }),
+  greylistingWhitelistDomain: (domain: string) =>
+    request<{ ok: boolean }>('/api/greylisting/whitelist-domain', {
+      method: 'POST',
+      body: JSON.stringify({ domain }),
+    }),
+  greylistingRemoveWhitelistDomain: (domain: string) =>
+    request<{ ok: boolean }>('/api/greylisting/remove-whitelist-domain', {
+      method: 'POST',
+      body: JSON.stringify({ domain }),
+    }),
+  greylistingSyncSpf: () =>
+    request<{ ok: boolean; message: string }>('/api/greylisting/sync-spf', { method: 'POST' }),
   quarantine: (content?: string, limit = 50, offset = 0) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
     if (content) params.set('content', content)

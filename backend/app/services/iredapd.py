@@ -23,6 +23,10 @@ SCRIPT_CANDIDATES: dict[str, tuple[str, ...]] = {
         "/opt/iredapd/tools/greylisting_admin.py",
         "/opt/www/iRedAPD/tools/greylisting_admin.py",
     ),
+    "spf_to_greylist_whitelists.py": (
+        "/opt/iredapd/tools/spf_to_greylist_whitelists.py",
+        "/opt/www/iRedAPD/tools/spf_to_greylist_whitelists.py",
+    ),
 }
 
 
@@ -94,6 +98,14 @@ def list_greylisting_whitelist_domains() -> str:
     )
 
 
+def list_greylisting_whitelists() -> str:
+    return _run_script(
+        get_config().paths.greylisting_script,
+        ["--list-whitelists"],
+        "greylisting_admin.py",
+    )
+
+
 def greylisting_disable(to_addr: str, from_addr: str | None = None) -> None:
     args = ["--disable", "--to", to_addr]
     if from_addr:
@@ -114,6 +126,50 @@ def greylisting_whitelist_domain(domain: str) -> None:
         ["--whitelist-domain", "--from", domain],
         "greylisting_admin.py",
     )
+
+
+def greylisting_remove_whitelist_domain(domain: str) -> None:
+    _run_script(
+        get_config().paths.greylisting_script,
+        ["--remove-whitelist-domain", "--from", domain],
+        "greylisting_admin.py",
+    )
+
+
+def greylisting_delete(to_addr: str, from_addr: str | None = None) -> None:
+    args = ["--delete", "--to", to_addr]
+    if from_addr:
+        args.extend(["--from", from_addr])
+    _run_script(get_config().paths.greylisting_script, args, "greylisting_admin.py")
+
+
+def sync_spf_greylist_whitelists() -> str:
+    script_path = None
+    for candidate in SCRIPT_CANDIDATES.get("spf_to_greylist_whitelists.py", ()):
+        candidate_path = Path(candidate)
+        if candidate_path.is_file():
+            script_path = candidate_path
+            break
+    if not script_path:
+        raise IredapdError("Скрипт spf_to_greylist_whitelists.py не найден в /opt/iredapd/tools/")
+    cwd = str(script_path.parent)
+    attempts: list[list[str]] = [["python3", script_path.name]]
+    if os.geteuid() != 0:
+        attempts.append(["sudo", "python3", script_path.name])
+    last_error = "Command failed"
+    for cmd in attempts:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=cwd,
+            timeout=180,
+        )
+        if result.returncode == 0:
+            return (result.stdout or "").strip() or "SPF greylist whitelists updated"
+        last_error = result.stderr.strip() or result.stdout.strip() or "Command failed"
+    raise IredapdError(last_error)
 
 
 def hash_mailbox_password(password: str, scheme: str = "SSHA512") -> str:

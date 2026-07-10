@@ -11,7 +11,8 @@ from app.services import amavis_policy, content_filter_ops, group_ops, iredapd, 
 from app.services.amavis_policy import AmavisPolicyError
 from app.services.content_filter_ops import ContentFilterError
 from app.services.iredapd import IredapdError
-from app.services import mail_journal_search, postfix_diagnostics, postfix_queue, quarantine_ops
+from app.services import iredapd, mail_journal_search, postfix_diagnostics, postfix_queue, quarantine_ops
+from app.services.greylisting_ops import get_greylisting_overview, greylisting_stats
 from app.services.postfix_queue import PostfixQueueError
 from app.services.quarantine_ops import QuarantineError
 from app.validators import normalize_email, validate_mailbox_password
@@ -454,39 +455,102 @@ def delete_wblist(
 @router.get("/greylisting", dependencies=[Depends(require_permission("antispam.read"))])
 def get_greylisting():
     try:
-        settings = iredapd.list_greylisting()
-        whitelist_domains = iredapd.list_greylisting_whitelist_domains()
-    except IredapdError as exc:
+        return get_greylisting_overview()
+    except iredapd.IredapdError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"settings": settings, "whitelist_domains": whitelist_domains}
+
+
+@router.get("/greylisting/stats", dependencies=[Depends(require_permission("antispam.read"))])
+def get_greylisting_stats(hours: int = 24):
+    try:
+        return greylisting_stats(hours=hours)
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.post("/greylisting/disable", dependencies=[Depends(require_permission("antispam.write"))])
-def grey_disable(payload: GreylistRequest, user: PanelUser = Depends(require_permission("antispam.write"))):
+def grey_disable(
+    payload: GreylistRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("antispam.write")),
+):
     try:
         iredapd.greylisting_disable(payload.to_addr, payload.from_addr)
-    except Exception as exc:
+        _audit(user, request, "disable", "greylisting", f"{payload.from_addr or '*'} -> {payload.to_addr}")
+    except iredapd.IredapdError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True}
 
 
 @router.post("/greylisting/enable", dependencies=[Depends(require_permission("antispam.write"))])
-def grey_enable(payload: GreylistRequest, user: PanelUser = Depends(require_permission("antispam.write"))):
+def grey_enable(
+    payload: GreylistRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("antispam.write")),
+):
     try:
         iredapd.greylisting_enable(payload.to_addr, payload.from_addr)
-    except Exception as exc:
+        _audit(user, request, "enable", "greylisting", f"{payload.from_addr or '*'} -> {payload.to_addr}")
+    except iredapd.IredapdError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True}
+
+
+@router.post("/greylisting/delete-rule", dependencies=[Depends(require_permission("antispam.write"))])
+def grey_delete_rule(
+    payload: GreylistRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("antispam.write")),
+):
+    try:
+        iredapd.greylisting_delete(payload.to_addr, payload.from_addr)
+        _audit(user, request, "delete", "greylisting", f"{payload.from_addr or '*'} -> {payload.to_addr}")
+    except iredapd.IredapdError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True}
 
 
 @router.post("/greylisting/whitelist-domain", dependencies=[Depends(require_permission("antispam.write"))])
-def grey_whitelist_domain(payload: GreylistDomainRequest, user: PanelUser = Depends(require_permission("antispam.write"))):
+def grey_whitelist_domain(
+    payload: GreylistDomainRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("antispam.write")),
+):
     domain = payload.domain if payload.domain.startswith("@") else f"@{payload.domain}"
     try:
         iredapd.greylisting_whitelist_domain(domain)
-    except Exception as exc:
+        _audit(user, request, "whitelist-domain", "greylisting", domain)
+    except iredapd.IredapdError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True}
+
+
+@router.post("/greylisting/remove-whitelist-domain", dependencies=[Depends(require_permission("antispam.write"))])
+def grey_remove_whitelist_domain(
+    payload: GreylistDomainRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("antispam.write")),
+):
+    domain = payload.domain if payload.domain.startswith("@") else f"@{payload.domain}"
+    try:
+        iredapd.greylisting_remove_whitelist_domain(domain)
+        _audit(user, request, "remove-whitelist-domain", "greylisting", domain)
+    except iredapd.IredapdError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True}
+
+
+@router.post("/greylisting/sync-spf", dependencies=[Depends(require_permission("antispam.write"))])
+def grey_sync_spf(
+    request: Request,
+    user: PanelUser = Depends(require_permission("antispam.write")),
+):
+    try:
+        message = iredapd.sync_spf_greylist_whitelists()
+        _audit(user, request, "sync-spf", "greylisting", "spf_to_greylist_whitelists.py")
+    except iredapd.IredapdError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "message": message}
 
 
 @router.get("/spam", dependencies=[Depends(require_permission("antispam.read"))])
