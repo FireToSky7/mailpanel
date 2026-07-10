@@ -359,18 +359,23 @@ sub before_send {{
 
 
 def _replace_hook_block(content: str, block: str) -> str:
-    marker_pattern = (
-        re.escape(MARKER_CUSTOM_HOOK_BEGIN) + r".*?" + re.escape(MARKER_CUSTOM_HOOK_END)
-    )
-    if re.search(marker_pattern, content, flags=re.DOTALL):
-        # Use lambda so Perl literals like \Q...\E are not treated as re.sub escapes.
-        return re.sub(marker_pattern, lambda _: block, content, count=1, flags=re.DOTALL)
+    begin = MARKER_CUSTOM_HOOK_BEGIN
+    end = MARKER_CUSTOM_HOOK_END
+    start = content.find(begin)
+    if start != -1:
+        end_pos = content.find(end, start)
+        if end_pos != -1:
+            end_pos += len(end)
+            return content[:start] + block + content[end_pos:]
     return content.rstrip() + "\n\n" + block + "\n"
 
 
 def _ensure_amavisd_custom_hook(content: str, custom_content: str) -> str:
     block = f"{MARKER_CUSTOM_HOOK_BEGIN}\n{custom_content.rstrip()}\n{MARKER_CUSTOM_HOOK_END}"
-    return _replace_hook_block(content, block)
+    updated = _replace_hook_block(content, block)
+    if "package Amavis::Custom" not in updated:
+        raise ContentFilterError("Сборка блока хука Amavis не удалась (package Amavis::Custom).")
+    return updated
 
 
 def _enabled_rules(filters: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -580,12 +585,16 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
     try:
         amavis_content = amavis_path.read_text(encoding="utf-8", errors="replace")
         amavis_content = _ensure_amavisd_custom_hook(amavis_content, custom_content)
-        if "package Amavis::Custom" not in amavis_content:
+        legacy_do = f"do '{custom_path.as_posix()}';"
+        if legacy_do in amavis_content:
             raise ContentFilterError(
-                "Не удалось встроить хук Amavis в amavisd.conf. "
-                "Проверьте маркеры MAILPANEL_CUSTOM_HOOK."
+                f"В amavisd.conf осталась строка {legacy_do!r} — хук не встроен. "
+                "Сообщите в поддержку MailPanel."
             )
         amavis_path.write_text(amavis_content, encoding="utf-8")
+        written = amavis_path.read_text(encoding="utf-8", errors="replace")
+        if "package Amavis::Custom" not in written:
+            raise ContentFilterError(f"Запись в {amavis_path} не подтверждена.")
     except OSError as exc:
         raise ContentFilterError(f"Не удалось обновить {amavis_path}: {exc}") from exc
 
