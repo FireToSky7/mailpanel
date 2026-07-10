@@ -496,9 +496,10 @@ sub Amavis::Custom::before_send {{
   return if $self->{{quarantined}};
   my ($field, $matched) = MailPanel::Filters::match_mail($msginfo);
   return unless $matched;
-  my $method = Amavis::Conf::c('spam_quarantine_method');
+  # Amavis::Conf::c() reads the active policy bank (MYNETS for internal mail), not globals.
+  my $method = $spam_quarantine_method;
   $method = 'sql:spam-%m' unless defined $method && length $method;
-  my $quar_to = Amavis::Conf::c('spam_quarantine_to');
+  my $quar_to = $spam_quarantine_to;
   $quar_to = 'spam-quarantine@localhost' unless defined $quar_to && length $quar_to;
   Amavis::load_policy_bank('MAILPANEL_CONTENT');
   for my $r (@{{$msginfo->per_recip_data}}) {{
