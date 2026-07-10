@@ -463,17 +463,22 @@ def _run_spamassassin_lint(local_cf: Path) -> str | None:
 
 def _sync_amavis_policy(filters: list[dict[str, Any]]) -> list[str]:
     warnings: list[str] = []
-    if not _enabled_rules(filters):
-        return warnings
+    active = bool(_enabled_rules(filters))
     try:
         from app.services import amavis_policy
 
         policy = amavis_policy.read_mail_policy()
-        if not policy.get("scan_internal_mail"):
+        if active and not policy.get("scan_internal_mail"):
             amavis_policy.write_mail_policy(True)
             warnings.append(
                 "Автоматически включена проверка внутренней почты в Amavis "
                 "(нужна для правил между ящиками на этом сервере)."
+            )
+        amavis_policy.set_content_filters_active(active)
+        if active:
+            warnings.append(
+                "Антивирус Amavis отключён для работы правил (ClamAV не установлен, "
+                "иначе письма проходят как UNCHECKED без проверки контента)."
             )
     except Exception as exc:
         warnings.append(f"Не удалось обновить политику Amavis: {exc}")
