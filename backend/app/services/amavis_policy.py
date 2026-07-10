@@ -188,6 +188,8 @@ foreach my $bank (keys %policy_bank) {
 $policy_bank{'MAILPANEL_CONTENT'} = {
   final_spam_destiny => D_QUARANTINE,
   final_banned_destiny => D_QUARANTINE,
+  spam_quarantine_to => $spam_quarantine_to,
+  spam_quarantine_method => $spam_quarantine_method,
 };
 """
     custom_do_block = ""

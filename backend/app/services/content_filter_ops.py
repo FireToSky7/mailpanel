@@ -192,18 +192,18 @@ def _build_sieve_block(filters: list[dict[str, Any]]) -> str:
         normalized = _normalize_filter(rule)
         pattern = _sieve_escape(normalized["pattern"])
         if normalized["field"] == "subject":
-            conditions.append(f'  header :mime :contains "Subject" "{pattern}",')
-            conditions.append(f'  header :contains "Subject" "{pattern}",')
+            conditions.append(f'  header :mime :contains "Subject" "{pattern}"')
+            conditions.append(f'  header :contains "Subject" "{pattern}"')
         else:
             needs_body = True
-            conditions.append(f'  body :contains "{pattern}",')
+            conditions.append(f'  body :contains "{pattern}"')
     if not conditions:
         return ""
     requires = ["fileinto"]
     if needs_body:
         requires.append("body")
     req = ", ".join(f'"{item}"' for item in requires)
-    cond = "\n".join(conditions)
+    cond = ",\n".join(conditions)
     return f"""{MARKER_SIEVE_BEGIN}
 require [{req}];
 if anyof (
@@ -436,23 +436,19 @@ sub check {{
   my ($self, $conn, $msginfo) = @_;
   my ($field, $matched) = MailPanel::Filters::match_mail($msginfo);
   return unless $matched;
-  Amavis::load_policy_bank('MAILPANEL_CONTENT');
   my $score = 100;
-  my $prev = $msginfo->spam_level;
-  $prev = 0 if !defined $prev || $prev eq '';
-  $msginfo->spam_level($prev + $score);
-  my $tests = $msginfo->spam_status;
-  $tests = '' if !defined $tests;
-  my $tag = 'MAILPANEL=1';
-  $msginfo->spam_status($tests eq '' ? $tag : "$tests,$tag");
   for my $r (@{{$msginfo->per_recip_data}}) {{
     my $rl = $r->spam_level;
     $rl = 0 if !defined $rl || $rl eq '';
     $r->spam_level($rl + $score);
     $r->add_contents_category(&main::CC_SPAM, 0);
   }}
+  my $tests = $msginfo->spam_status;
+  $tests = '' if !defined $tests;
+  my $tag = 'MAILPANEL=1';
+  $msginfo->spam_status($tests eq '' ? $tag : "$tests,$tag");
   $msginfo->add_contents_category(&main::CC_SPAM, 0);
-  Amavis::Util::do_log(0, "MAILPANEL: scanner (%s) <%s> score=%s", $field, $msginfo->sender || '?', $prev + $score);
+  Amavis::Util::do_log(0, "MAILPANEL: scanner (%s) <%s> score=%s", $field, $msginfo->sender || '?', $score);
 }}
 
 sub Amavis::Custom::new {{
@@ -465,12 +461,10 @@ sub Amavis::Custom::checks {{
   my ($self, $conn, $msginfo) = @_;
   my ($field, $matched) = MailPanel::Filters::match_mail($msginfo);
   return unless $matched;
-  Amavis::load_policy_bank('MAILPANEL_CONTENT');
   for my $r (@{{$msginfo->per_recip_data}}) {{
     $r->bypass_spam_checks(0);
   }}
-  Amavis::SpamControl::MailPanel::check(bless({{}}, 'Amavis::SpamControl::MailPanel'), $conn, $msginfo);
-  $self->{{quarantined}} = 1;
+  Amavis::Util::do_log(0, "MAILPANEL: checks matched (%s) <%s>", $field, $msginfo->sender || '?');
 }}
 
 sub Amavis::Custom::before_send {{
@@ -491,7 +485,10 @@ sub Amavis::Custom::before_send {{
     if (!$@) {{
       $r->recip_done(1);
       $r->recip_smtp_response('250 2.7.0 MailPanel content filter quarantine');
+      $self->{{quarantined}} = 1;
       Amavis::Util::do_log(0, "MAILPANEL: before_send quarantine (%s) <%s>", $field, $r->recip_addr);
+    }} else {{
+      Amavis::Util::do_log(0, "MAILPANEL: quarantine failed (%s) <%s>: %s", $field, $r->recip_addr, $@);
     }}
   }}
 }}
