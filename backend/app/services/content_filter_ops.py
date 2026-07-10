@@ -445,7 +445,6 @@ sub quarantine_match {{
   $method = 'sql:spam-%m' unless defined $method && length $method;
   my $quar_to = $main::spam_quarantine_to;
   $quar_to = 'spam-quarantine@localhost' unless defined $quar_to && length $quar_to;
-  Amavis::load_policy_bank('MAILPANEL_CONTENT');
   for my $r (@{{$msginfo->per_recip_data}}) {{
     $r->bypass_spam_checks(0);
     next if $r->recip_done;
