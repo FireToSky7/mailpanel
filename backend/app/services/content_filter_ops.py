@@ -139,7 +139,7 @@ def _sa_regex(pattern: str) -> str:
 
 
 def _perl_qr(pattern: str) -> str:
-    safe = pattern.replace("\\", "\\\\").replace("\E", "\\E")
+    safe = pattern.replace("\\", "\\\\").replace("\\E", "\\\\E")
     return f"qr/\\Q{safe}\\E/i"
 
 
