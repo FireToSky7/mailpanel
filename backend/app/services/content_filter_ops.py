@@ -504,21 +504,17 @@ def _amavisd_active() -> bool:
     return result.stdout.strip() == "active"
 
 
-def _test_amavisd_config() -> str | None:
-    for cmd in (["amavisd", "testconfig"], ["/usr/sbin/amavisd", "testconfig"]):
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=60,
-        )
-        if result.returncode == 0:
-            return None
-        output = (result.stderr or result.stdout or "").strip()
-        if result.returncode != 127 and output:
-            return output
-    return None
+def _perl_syntax_check(path: Path) -> str | None:
+    result = subprocess.run(
+        ["perl", "-c", str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if result.returncode == 0:
+        return None
+    return (result.stderr or result.stdout or "perl -c failed").strip()
 
 
 def _restart_amavisd() -> str | None:
@@ -636,17 +632,14 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
             f"Файл amavisd.conf не найден: {amavis_path}. "
             "Проверьте paths.amavisd_config в config.yaml"
         )
+    amavis_backup = amavis_path.read_text(encoding="utf-8", errors="replace")
     try:
-        amavis_content = amavis_path.read_text(encoding="utf-8", errors="replace")
-        amavis_backup = amavis_content
-        amavis_content = _ensure_amavisd_custom_hook(amavis_content, hook_block, custom_path)
+        amavis_content = _ensure_amavisd_custom_hook(amavis_backup, hook_block, custom_path)
         amavis_path.write_text(amavis_content, encoding="utf-8")
-        config_error = _test_amavisd_config()
-        if config_error:
+        perl_error = _perl_syntax_check(custom_path)
+        if perl_error:
             amavis_path.write_text(amavis_backup, encoding="utf-8")
-            raise ContentFilterError(
-                f"Конфигурация Amavis не прошла проверку: {config_error[:500]}"
-            )
+            raise ContentFilterError(f"Синтаксис хука Amavis: {perl_error[:500]}")
         written = amavis_path.read_text(encoding="utf-8", errors="replace")
         if f"do '{custom_path.as_posix()}';" not in written:
             raise ContentFilterError(f"Запись в {amavis_path} не подтверждена.")
@@ -671,7 +664,15 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
     warnings.extend(_sync_amavis_policy(filters))
     restart_error = _restart_amavisd()
     if restart_error:
-        warnings.append(f"Amavis не перезапустился: {restart_error[:300]}")
+        try:
+            amavis_path.write_text(amavis_backup, encoding="utf-8")
+            _restart_amavisd()
+        except OSError:
+            pass
+        raise ContentFilterError(
+            f"Amavis не запустился после применения правил: {restart_error[:500]}. "
+            "Проверьте: journalctl -u amavisd -n 30"
+        )
     return warnings
 
 
