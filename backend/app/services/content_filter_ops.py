@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import secrets
 import subprocess
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,12 @@ MARKER_CUSTOM_HOOK_BEGIN = "# MAILPANEL_CUSTOM_HOOK_BEGIN"
 MARKER_SIEVE_BEGIN = "# MAILPANEL_SIEVE_BEGIN"
 MARKER_SIEVE_END = "# MAILPANEL_SIEVE_END"
 MARKER_CUSTOM_HOOK_END = "# MAILPANEL_CUSTOM_HOOK_END"
+
+_UNSUPPORTED_SIEVE_EXTENSIONS = frozenset({
+    "comparator-i;unicode-casemap",
+    "comparator-i;ascii-casemap",
+    "regex",
+})
 
 FILTER_SCORE = 100.0
 VALID_FIELDS = {"subject", "body"}
@@ -185,16 +192,29 @@ def _sieve_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _sieve_regex_literal(pattern: str) -> str:
-    return "(?iu)" + re.escape(pattern)
-
-
-def _sieve_regex_quoted(pattern: str) -> str:
-    return _sieve_regex_literal(pattern).replace("\\", "\\\\").replace('"', '\\"')
+def _case_permutations(text: str, limit: int = 64) -> list[str]:
+    """All upper/lower combinations for short Cyrillic/Latin patterns (Sieve fallback)."""
+    if not text:
+        return []
+    folded = text.casefold()
+    options: list[list[str]] = []
+    for ch in folded:
+        variants = list(dict.fromkeys([ch, ch.lower(), ch.upper()]))
+        options.append(variants)
+    result: list[str] = []
+    seen: set[str] = set()
+    for combo in product(*options):
+        if len(result) >= limit:
+            break
+        value = "".join(combo)
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result or [text]
 
 
 def _sieve_required_extensions(filters: list[dict[str, Any]]) -> list[str]:
-    extensions = ["fileinto", "regex"]
+    extensions = ["fileinto"]
     for rule in _enabled_rules(filters):
         if _normalize_filter(rule)["field"] == "body":
             extensions.append("body")
@@ -215,9 +235,10 @@ def _merge_sieve_requires(content: str, extensions: list[str]) -> str:
     merged: list[str] = []
     seen: set[str] = set()
     for item in [*existing, *extensions]:
-        if item and item not in seen:
-            seen.add(item)
-            merged.append(item)
+        if not item or item in seen or item in _UNSUPPORTED_SIEVE_EXTENSIONS:
+            continue
+        seen.add(item)
+        merged.append(item)
     req_line = "require [" + ", ".join(f'"{item}"' for item in merged) + "];"
     if match:
         return content[: match.start()] + req_line + content[match.end() :]
@@ -228,11 +249,12 @@ def _build_sieve_block(filters: list[dict[str, Any]]) -> str:
     conditions: list[str] = []
     for rule in _enabled_rules(filters):
         normalized = _normalize_filter(rule)
-        pattern = _sieve_regex_quoted(normalized["pattern"])
-        if normalized["field"] == "subject":
-            conditions.append(f'  header :regex "Subject" ["{pattern}"]')
-        else:
-            conditions.append(f'  body :regex ["{pattern}"]')
+        for pattern in _case_permutations(normalized["pattern"]):
+            escaped = _sieve_escape(pattern)
+            if normalized["field"] == "subject":
+                conditions.append(f'  header :contains "Subject" "{escaped}"')
+            else:
+                conditions.append(f'  body :contains "{escaped}"')
     if not conditions:
         return ""
     cond = ",\n".join(conditions)
@@ -300,7 +322,7 @@ def _ensure_dovecot_sieve_block(filters: list[dict[str, Any]]) -> list[str]:
     )
     if compile_result.returncode != 0:
         detail = (compile_result.stderr or compile_result.stdout or "sievec failed").strip()
-        warnings.append(f"Проверка sievec: {detail[:300]}")
+        raise ContentFilterError(f"Скрипт Sieve не компилируется: {detail[:500]}")
     restart = subprocess.run(
         ["systemctl", "restart", "dovecot"],
         capture_output=True,
@@ -320,6 +342,19 @@ def _write_readable(path: Path, content: str, mode: int = 0o644) -> None:
         path.chmod(mode)
     except OSError:
         pass
+
+
+def _validate_perl_custom_filters(path: Path) -> None:
+    result = subprocess.run(
+        ["perl", "-c", str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "perl -c failed").strip()
+        raise ContentFilterError(f"Синтаксис {path}: {detail[:500]}")
 
 
 def _check_amavis_mailpanel_journal(active: bool) -> None:
@@ -405,7 +440,7 @@ sub _fold_case {{
   my ($value) = @_;
   my $text = _to_utf8($value);
   $text = lc $text;
-  $text =~ tr/\\x{{0410}}-\\x{{042F}}\\x{{0401}}/\\x{{0430}}-\\x{{044F}}\\x{{0451}}/;
+  $text =~ tr/А-ЯЁ/а-яё/;
   return $text;
 }}
 
@@ -891,6 +926,7 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
     if "before_send quarantine" not in custom_content:
         raise ContentFilterError("Сборка quarantine hook MailPanel не удалась.")
     _write_readable(custom_path, custom_content)
+    _validate_perl_custom_filters(custom_path)
 
     late_path = amavis_late_policy_path()
     late_content = _build_amavis_late_policy(filters)
