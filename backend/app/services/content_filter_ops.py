@@ -20,16 +20,12 @@ MARKER_SIEVE_BEGIN = "# MAILPANEL_SIEVE_BEGIN"
 MARKER_SIEVE_END = "# MAILPANEL_SIEVE_END"
 MARKER_CUSTOM_HOOK_END = "# MAILPANEL_CUSTOM_HOOK_END"
 
-_UNSUPPORTED_SIEVE_EXTENSIONS = frozenset({
-    "comparator-i;unicode-casemap",
-    "comparator-i;ascii-casemap",
-    "regex",
-})
-
 FILTER_SCORE = 100.0
 VALID_FIELDS = {"subject", "body"}
 FIELD_LABELS = {"subject": "Тема", "body": "Текст"}
 RULE_ID_RE = re.compile(r"^[a-z0-9]{6,16}$")
+_CYRILLIC_FOLD_FROM = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"
+_CYRILLIC_FOLD_TO = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
 
 
 class ContentFilterError(RuntimeError):
@@ -161,7 +157,7 @@ def _sa_regex(pattern: str) -> str:
 
 def _perl_qr(pattern: str) -> str:
     safe = pattern.replace("\\", "\\\\").replace("\\E", "\\\\E")
-    return f"qr/\\Q{safe}\\E/iu"
+    return f"qr/\\Q{safe}\\E/i"
 
 
 def _perl_qr_variants(pattern: str) -> list[str]:
@@ -223,23 +219,10 @@ def _sieve_required_extensions(filters: list[dict[str, Any]]) -> list[str]:
 
 
 def _merge_sieve_requires(content: str, extensions: list[str]) -> str:
+    needed = list(dict.fromkeys(extensions))
+    req_line = "require [" + ", ".join(f'"{item}"' for item in needed) + "];"
     require_re = re.compile(r"^require\s+\[([^\]]*)\]\s*;", re.MULTILINE)
     match = require_re.search(content)
-    existing: list[str] = []
-    if match:
-        existing = [
-            item.strip().strip('"').strip("'")
-            for item in match.group(1).split(",")
-            if item.strip()
-        ]
-    merged: list[str] = []
-    seen: set[str] = set()
-    for item in [*existing, *extensions]:
-        if not item or item in seen or item in _UNSUPPORTED_SIEVE_EXTENSIONS:
-            continue
-        seen.add(item)
-        merged.append(item)
-    req_line = "require [" + ", ".join(f'"{item}"' for item in merged) + "];"
     if match:
         return content[: match.start()] + req_line + content[match.end() :]
     return req_line + "\n\n" + content.lstrip()
@@ -412,7 +395,6 @@ def _build_amavis_custom_package(filters: list[dict[str, Any]]) -> str:
 use utf8;
 use strict;
 use warnings;
-use Encode qw(decode_utf8 FB_DEFAULT);
 no warnings qw(redefine uninitialized);
 
 package MailPanel::Filters;
@@ -429,25 +411,12 @@ our @BODY_PATTERNS = (
 {body_block}
 );
 
-sub _to_utf8 {{
-  my ($value) = @_;
-  return '' unless defined $value && length $value;
-  return $value if utf8::is_utf8($value);
-  eval {{ decode_utf8($value, FB_DEFAULT) }} // $value;
-}}
-
-sub _fold_case {{
-  my ($value) = @_;
-  my $text = _to_utf8($value);
-  $text = lc $text;
-  $text =~ tr/А-ЯЁ/а-яё/;
+sub _fold_text {{
+  my ($text) = @_;
+  return '' unless defined $text;
+  $text = lc($text);
+  $text =~ tr/{_CYRILLIC_FOLD_FROM}/{_CYRILLIC_FOLD_TO}/;
   return $text;
-}}
-
-sub _contains_folded {{
-  my ($haystack, $needle) = @_;
-  return 0 unless defined $haystack && defined $needle && length $needle;
-  return index(_fold_case($haystack), _fold_case($needle)) >= 0;
 }}
 
 sub _decode_header {{
@@ -492,12 +461,13 @@ sub _match_literals {{
   return 0 unless $values && $literals && @$literals;
   for my $literal (@$literals) {{
     next unless defined $literal && length $literal;
+    my $needle = _fold_text($literal);
     for my $value (@$values) {{
       next unless defined $value && length $value;
       my $decoded = _decode_header($value);
       for my $candidate ($value, $decoded) {{
         next unless defined $candidate && length $candidate;
-        return 1 if _contains_folded($candidate, $literal);
+        return 1 if index(_fold_text($candidate), $needle) >= 0;
       }}
     }}
   }}
@@ -521,13 +491,13 @@ sub _subject_candidates {{
   }}
   push @values, _subject_from_mail_file($msginfo);
   my %seen;
-  return grep {{ defined $_ && length $_ && !$seen{{_fold_case($_)}}++ }} @values;
+  return grep {{ defined $_ && length $_ && !$seen{{_fold_text($_)}}++ }} @values;
 }}
 
 sub _match_patterns {{
-  my ($values, $patterns, $literals, $field_name) = @_;
+  my ($values, $patterns, $field_name) = @_;
   $field_name = 'subject' unless defined $field_name && length $field_name;
-  return ('', 0) unless $values && (@$patterns || @$literals);
+  return ('', 0) unless $values && @$patterns;
   for my $value (@$values) {{
     my @candidates = ($value);
     if ($field_name eq 'subject') {{
@@ -535,13 +505,8 @@ sub _match_patterns {{
       push @candidates, $decoded if length $decoded;
     }}
     for my $candidate (@candidates) {{
-      my $text = _to_utf8($candidate);
-      for my $literal (@$literals) {{
-        next unless defined $literal && length $literal;
-        return ($field_name, 1) if _contains_folded($text, $literal);
-      }}
       for my $pat (@$patterns) {{
-        return ($field_name, 1) if $text =~ $pat;
+        return ($field_name, 1) if $candidate =~ $pat;
       }}
     }}
   }}
@@ -574,12 +539,10 @@ sub match_mail {{
   if (@SUBJECT_LITERALS && _match_literals(\\@subjects, \\@SUBJECT_LITERALS)) {{
     return ('subject', 1);
   }}
-  my ($field, $matched) = _match_patterns(
-    \\@subjects, \\@SUBJECT_PATTERNS, \\@SUBJECT_LITERALS, 'subject');
+  my ($field, $matched) = _match_patterns(\\@subjects, \\@SUBJECT_PATTERNS, 'subject');
   if (!$matched && @BODY_PATTERNS) {{
     my $body = _read_body_sample($msginfo);
-    ($field, $matched) = _match_patterns(
-      [$body], \\@BODY_PATTERNS, [], 'body');
+    ($field, $matched) = _match_patterns([$body], \\@BODY_PATTERNS, 'body');
   }}
   return ($field, $matched);
 }}
