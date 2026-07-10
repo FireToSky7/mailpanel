@@ -185,8 +185,16 @@ def _sieve_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _sieve_regex_literal(pattern: str) -> str:
+    return "(?iu)" + re.escape(pattern)
+
+
+def _sieve_regex_quoted(pattern: str) -> str:
+    return _sieve_regex_literal(pattern).replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _sieve_required_extensions(filters: list[dict[str, Any]]) -> list[str]:
-    extensions = ["fileinto", "comparator-i;unicode-casemap"]
+    extensions = ["fileinto", "regex"]
     for rule in _enabled_rules(filters):
         if _normalize_filter(rule)["field"] == "body":
             extensions.append("body")
@@ -220,15 +228,11 @@ def _build_sieve_block(filters: list[dict[str, Any]]) -> str:
     conditions: list[str] = []
     for rule in _enabled_rules(filters):
         normalized = _normalize_filter(rule)
-        pattern = _sieve_escape(normalized["pattern"])
+        pattern = _sieve_regex_quoted(normalized["pattern"])
         if normalized["field"] == "subject":
-            conditions.append(
-                f'  header :comparator "i;unicode-casemap" :contains "Subject" "{pattern}"'
-            )
+            conditions.append(f'  header :regex "Subject" ["{pattern}"]')
         else:
-            conditions.append(
-                f'  body :comparator "i;unicode-casemap" :contains "{pattern}"'
-            )
+            conditions.append(f'  body :regex ["{pattern}"]')
     if not conditions:
         return ""
     cond = ",\n".join(conditions)
@@ -373,8 +377,7 @@ def _build_amavis_custom_package(filters: list[dict[str, Any]]) -> str:
 use utf8;
 use strict;
 use warnings;
-use feature 'fc';
-use Encode qw(decode_utf8);
+use Encode qw(decode_utf8 FB_DEFAULT);
 no warnings qw(redefine uninitialized);
 
 package MailPanel::Filters;
@@ -395,13 +398,21 @@ sub _to_utf8 {{
   my ($value) = @_;
   return '' unless defined $value && length $value;
   return $value if utf8::is_utf8($value);
-  eval {{ decode_utf8($value, Encode::FB_DEFAULT) }} // $value;
+  eval {{ decode_utf8($value, FB_DEFAULT) }} // $value;
 }}
 
 sub _fold_case {{
   my ($value) = @_;
   my $text = _to_utf8($value);
-  return fc($text);
+  $text = lc $text;
+  $text =~ tr/\\x{{0410}}-\\x{{042F}}\\x{{0401}}/\\x{{0430}}-\\x{{044F}}\\x{{0451}}/;
+  return $text;
+}}
+
+sub _contains_folded {{
+  my ($haystack, $needle) = @_;
+  return 0 unless defined $haystack && defined $needle && length $needle;
+  return index(_fold_case($haystack), _fold_case($needle)) >= 0;
 }}
 
 sub _decode_header {{
@@ -446,13 +457,12 @@ sub _match_literals {{
   return 0 unless $values && $literals && @$literals;
   for my $literal (@$literals) {{
     next unless defined $literal && length $literal;
-    my $needle = _fold_case($literal);
     for my $value (@$values) {{
       next unless defined $value && length $value;
       my $decoded = _decode_header($value);
       for my $candidate ($value, $decoded) {{
         next unless defined $candidate && length $candidate;
-        return 1 if index(_fold_case($candidate), $needle) >= 0;
+        return 1 if _contains_folded($candidate, $literal);
       }}
     }}
   }}
@@ -476,13 +486,13 @@ sub _subject_candidates {{
   }}
   push @values, _subject_from_mail_file($msginfo);
   my %seen;
-  return grep {{ defined $_ && length $_ && !$seen{{lc($_)}}++ }} @values;
+  return grep {{ defined $_ && length $_ && !$seen{{_fold_case($_)}}++ }} @values;
 }}
 
 sub _match_patterns {{
-  my ($values, $patterns, $field_name) = @_;
+  my ($values, $patterns, $literals, $field_name) = @_;
   $field_name = 'subject' unless defined $field_name && length $field_name;
-  return ('', 0) unless $values && @$patterns;
+  return ('', 0) unless $values && (@$patterns || @$literals);
   for my $value (@$values) {{
     my @candidates = ($value);
     if ($field_name eq 'subject') {{
@@ -491,6 +501,10 @@ sub _match_patterns {{
     }}
     for my $candidate (@candidates) {{
       my $text = _to_utf8($candidate);
+      for my $literal (@$literals) {{
+        next unless defined $literal && length $literal;
+        return ($field_name, 1) if _contains_folded($text, $literal);
+      }}
       for my $pat (@$patterns) {{
         return ($field_name, 1) if $text =~ $pat;
       }}
@@ -525,10 +539,12 @@ sub match_mail {{
   if (@SUBJECT_LITERALS && _match_literals(\\@subjects, \\@SUBJECT_LITERALS)) {{
     return ('subject', 1);
   }}
-  my ($field, $matched) = _match_patterns(\\@subjects, \\@SUBJECT_PATTERNS, 'subject');
+  my ($field, $matched) = _match_patterns(
+    \\@subjects, \\@SUBJECT_PATTERNS, \\@SUBJECT_LITERALS, 'subject');
   if (!$matched && @BODY_PATTERNS) {{
     my $body = _read_body_sample($msginfo);
-    ($field, $matched) = _match_patterns([$body], \\@BODY_PATTERNS, 'body');
+    ($field, $matched) = _match_patterns(
+      [$body], \\@BODY_PATTERNS, [], 'body');
   }}
   return ($field, $matched);
 }}
