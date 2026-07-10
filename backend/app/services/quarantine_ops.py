@@ -5,6 +5,7 @@ import email.policy
 import re
 import socket
 from datetime import datetime
+from email.header import decode_header, make_header
 from email.message import EmailMessage
 from typing import Any
 
@@ -33,10 +34,25 @@ def _decode_field(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, bytes):
-        return value.decode("ascii", errors="replace").strip("\x00")
+        for encoding in ("utf-8", "latin-1"):
+            try:
+                return value.decode(encoding).strip("\x00")
+            except UnicodeDecodeError:
+                continue
+        return value.decode("utf-8", errors="replace").strip("\x00")
     if isinstance(value, datetime):
         return value.isoformat(sep=" ", timespec="seconds")
-    return str(value)
+    return str(value).strip("\x00")
+
+
+def _decode_subject(value: Any) -> str:
+    text = _decode_field(value)
+    if not text:
+        return "—"
+    try:
+        return str(make_header(decode_header(text)))
+    except Exception:
+        return text
 
 
 def _validate_mail_id(mail_id: str) -> str:
@@ -54,6 +70,11 @@ def _normalize_partition_tag(partition_tag: str | None) -> str:
 
 def _row_to_item(row: dict[str, Any]) -> dict[str, Any]:
     content = _decode_field(row.get("content"))
+    spam_level = float(row["spam_level"]) if row.get("spam_level") is not None else None
+    if content == "C" and spam_level is not None and spam_level >= 100:
+        content_label = "Спам"
+    else:
+        content_label = CONTENT_LABELS.get(content, content or "—")
     return {
         "mail_id": _decode_field(row.get("mail_id")),
         "secret_id": _decode_field(row.get("secret_id")),
@@ -61,10 +82,10 @@ def _row_to_item(row: dict[str, Any]) -> dict[str, Any]:
         "time_iso": _decode_field(row.get("time_iso")),
         "time_num": int(row.get("time_num") or 0),
         "content": content,
-        "content_label": CONTENT_LABELS.get(content, content or "—"),
-        "subject": _decode_field(row.get("subject")) or "—",
+        "content_label": content_label,
+        "subject": _decode_subject(row.get("subject")),
         "from_addr": _decode_field(row.get("from_addr")) or "—",
-        "spam_level": float(row["spam_level"]) if row.get("spam_level") is not None else None,
+        "spam_level": spam_level,
         "size": int(row.get("size") or 0),
         "recipients": [part.strip() for part in _decode_field(row.get("recipients")).split(",") if part.strip()],
     }

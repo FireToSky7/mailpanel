@@ -370,6 +370,8 @@ use strict;
 use warnings;
 no warnings qw(redefine uninitialized);
 
+use Amavis::Conf qw(:platform);
+
 package MailPanel::Filters;
 
 our @SUBJECT_PATTERNS = (
@@ -524,10 +526,9 @@ sub Amavis::Custom::checks {{
     my $rl = $r->spam_level;
     $rl = 0 if !defined $rl || $rl eq '';
     $r->spam_level($rl + 100);
-    $r->add_contents_category(&main::CC_SPAM, 0);
-    $r->recip_destiny(&main::D_QUARANTINE);
+    $r->add_contents_category(CC_SPAM, 0);
   }}
-  $msginfo->add_contents_category(&main::CC_SPAM, 0);
+  $msginfo->add_contents_category(CC_SPAM, 0);
   Amavis::Util::do_log(0, "MAILPANEL: checks matched (%s) <%s>", $field, $msginfo->sender || '?');
 }}
 
@@ -544,6 +545,10 @@ sub Amavis::Custom::before_send {{
   $method = 'sql:spam-%m' unless defined $method && length $method;
   my $quar_to = $main::spam_quarantine_to;
   $quar_to = 'spam-quarantine@localhost' unless defined $quar_to && length $quar_to;
+  for my $r (@{{$msginfo->per_recip_data}}) {{
+    $r->add_contents_category(CC_SPAM, 0);
+  }}
+  $msginfo->add_contents_category(CC_SPAM, 0);
   eval {{ my $he = $msginfo->header_edits; }};
   my $quar_ok = 0;
   eval {{
