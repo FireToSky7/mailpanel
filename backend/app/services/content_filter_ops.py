@@ -274,7 +274,7 @@ sub _block_recipients {{
   my ($conn, $msginfo, $matched_field, $self) = @_;
   return if $self && $self->{{blocked}};
   Amavis::load_policy_bank('MAILPANEL_CONTENT');
-  $msginfo->add_contents_category(CC_SPAM, 999);
+  $msginfo->add_contents_category(&main::CC_SPAM, 999);
   my $method = c('spam_quarantine_method');
   $method = 'sql:spam-%m' unless defined $method && length $method;
   my $quar_to = c('spam_quarantine_to');
@@ -282,7 +282,7 @@ sub _block_recipients {{
   my $blocked = 0;
   for my $r (@{{$msginfo->per_recip_data}}) {{
     next if $r->recip_done;
-    $r->add_contents_category(CC_SPAM, 999);
+    $r->add_contents_category(&main::CC_SPAM, 999);
     $r->spam_level(999);
     eval {{
       Amavis::do_quarantine($conn, $msginfo, $r, [$quar_to], $method);
@@ -504,23 +504,6 @@ def _amavisd_active() -> bool:
     return result.stdout.strip() == "active"
 
 
-def _perl_syntax_check(path: Path) -> str | None:
-    result = subprocess.run(
-        ["perl", "-c", str(path)],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
-    if result.returncode == 0:
-        return None
-    output = (result.stderr or result.stdout or "perl -c failed").strip()
-    # perl -c without full Amavis runtime can false-positive; restart is authoritative.
-    if "Can't locate Amavis/" in output or "Compilation failed in require" in output:
-        return None
-    return output
-
-
 def _restart_amavisd() -> str | None:
     result = subprocess.run(
         ["systemctl", "restart", "amavisd"],
@@ -640,10 +623,6 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
     try:
         amavis_content = _ensure_amavisd_custom_hook(amavis_backup, hook_block, custom_path)
         amavis_path.write_text(amavis_content, encoding="utf-8")
-        perl_error = _perl_syntax_check(custom_path)
-        if perl_error:
-            amavis_path.write_text(amavis_backup, encoding="utf-8")
-            raise ContentFilterError(f"Синтаксис хука Amavis: {perl_error[:500]}")
         written = amavis_path.read_text(encoding="utf-8", errors="replace")
         if f"do '{custom_path.as_posix()}';" not in written:
             raise ContentFilterError(f"Запись в {amavis_path} не подтверждена.")
