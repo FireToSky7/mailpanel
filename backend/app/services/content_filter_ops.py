@@ -377,14 +377,27 @@ def _build_amavis_custom_package(filters: list[dict[str, Any]]) -> str:
     subject_patterns: list[str] = []
     subject_literals: list[str] = []
     body_patterns: list[str] = []
+    subject_literals_seen: set[str] = set()
+    subject_patterns_seen: set[str] = set()
+    body_patterns_seen: set[str] = set()
     for rule in _enabled_rules(filters):
         normalized = _normalize_filter(rule)
-        perl_patterns = _perl_qr_variants(normalized["pattern"])
+        variants = _case_permutations(normalized["pattern"])
         if normalized["field"] == "subject":
-            subject_literals.append(normalized["pattern"])
-            subject_patterns.extend(perl_patterns)
+            for variant in variants:
+                if variant not in subject_literals_seen:
+                    subject_literals_seen.add(variant)
+                    subject_literals.append(variant)
+                for perl_pattern in _perl_qr_variants(variant):
+                    if perl_pattern not in subject_patterns_seen:
+                        subject_patterns_seen.add(perl_pattern)
+                        subject_patterns.append(perl_pattern)
         else:
-            body_patterns.append(_perl_qr(normalized["pattern"]))
+            for variant in variants:
+                perl_pattern = _perl_qr(variant)
+                if perl_pattern not in body_patterns_seen:
+                    body_patterns_seen.add(perl_pattern)
+                    body_patterns.append(perl_pattern)
 
     subject_block = "\n".join(f"  {item}," for item in subject_patterns) or ""
     subject_literals_block = "\n".join(f"  {_perl_q_string(item)}," for item in subject_literals) or ""
@@ -461,13 +474,13 @@ sub _match_literals {{
   return 0 unless $values && $literals && @$literals;
   for my $literal (@$literals) {{
     next unless defined $literal && length $literal;
-    my $needle = _fold_text($literal);
     for my $value (@$values) {{
       next unless defined $value && length $value;
       my $decoded = _decode_header($value);
       for my $candidate ($value, $decoded) {{
         next unless defined $candidate && length $candidate;
-        return 1 if index(_fold_text($candidate), $needle) >= 0;
+        return 1 if index($candidate, $literal) >= 0;
+        return 1 if index(_fold_text($candidate), _fold_text($literal)) >= 0;
       }}
     }}
   }}
