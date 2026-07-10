@@ -185,27 +185,50 @@ def _sieve_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def _sieve_required_extensions(filters: list[dict[str, Any]]) -> list[str]:
+    extensions = ["fileinto"]
+    for rule in _enabled_rules(filters):
+        if _normalize_filter(rule)["field"] == "body":
+            extensions.append("body")
+            break
+    return extensions
+
+
+def _merge_sieve_requires(content: str, extensions: list[str]) -> str:
+    require_re = re.compile(r"^require\s+\[([^\]]*)\]\s*;", re.MULTILINE)
+    match = require_re.search(content)
+    existing: list[str] = []
+    if match:
+        existing = [
+            item.strip().strip('"').strip("'")
+            for item in match.group(1).split(",")
+            if item.strip()
+        ]
+    merged: list[str] = []
+    seen: set[str] = set()
+    for item in [*existing, *extensions]:
+        if item and item not in seen:
+            seen.add(item)
+            merged.append(item)
+    req_line = "require [" + ", ".join(f'"{item}"' for item in merged) + "];"
+    if match:
+        return content[: match.start()] + req_line + content[match.end() :]
+    return req_line + "\n\n" + content.lstrip()
+
+
 def _build_sieve_block(filters: list[dict[str, Any]]) -> str:
     conditions: list[str] = []
-    needs_body = False
     for rule in _enabled_rules(filters):
         normalized = _normalize_filter(rule)
         pattern = _sieve_escape(normalized["pattern"])
         if normalized["field"] == "subject":
-            conditions.append(f'  header :mime :contains "Subject" "{pattern}"')
             conditions.append(f'  header :contains "Subject" "{pattern}"')
         else:
-            needs_body = True
             conditions.append(f'  body :contains "{pattern}"')
     if not conditions:
         return ""
-    requires = ["fileinto"]
-    if needs_body:
-        requires.append("body")
-    req = ", ".join(f'"{item}"' for item in requires)
     cond = ",\n".join(conditions)
     return f"""{MARKER_SIEVE_BEGIN}
-require [{req}];
 if anyof (
 {cond}
 ) {{
@@ -253,6 +276,7 @@ def _ensure_dovecot_sieve_block(filters: list[dict[str, Any]]) -> list[str]:
         )
     else:
         content = content.rstrip() + "\n\n" + block + "\n"
+    content = _merge_sieve_requires(content, _sieve_required_extensions(filters))
     sieve_path.write_text(content, encoding="utf-8")
     try:
         sieve_path.chmod(0o644)
