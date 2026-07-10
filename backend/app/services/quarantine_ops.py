@@ -97,6 +97,19 @@ def _recipient_filter_sql(recipient: str | None) -> tuple[str, list[Any]]:
     return " AND rcp.email = %s ", [recipient.lower()]
 
 
+def _content_filter_sql(content: str | None) -> tuple[str, list[Any]]:
+    if not content:
+        return "", []
+    normalized = content.upper()
+    if normalized == "S":
+        # MailPanel content-filter quarantine is stored as content=C with spam_level>=100.
+        return (
+            " AND (m.content = %s OR m.content = %s OR (m.content = %s AND m.spam_level >= %s)) ",
+            ["S", "Y", "C", 100],
+        )
+    return " AND m.content = %s ", [normalized]
+
+
 def count_quarantine() -> int:
     with amavisd_conn() as conn:
         row = fetch_one(
@@ -117,11 +130,7 @@ def list_quarantine(
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
     recipient_sql, recipient_params = _recipient_filter_sql(recipient)
-    content_sql = ""
-    content_params: list[Any] = []
-    if content:
-        content_sql = " AND m.content = %s "
-        content_params = [content.upper()]
+    content_sql, content_params = _content_filter_sql(content)
 
     with amavisd_conn() as conn:
         total_row = fetch_one(
