@@ -314,15 +314,16 @@ def _write_readable(path: Path, content: str, mode: int = 0o644) -> None:
         pass
 
 
-def _check_amavis_mailpanel_journal(active: bool) -> str | None:
+def _check_amavis_mailpanel_journal(active: bool) -> None:
     if not active:
-        return None
+        return
     tail = _amavisd_journal_tail(40)
-    if "MAILPANEL:" in tail:
-        return None
-    return (
-        "После перезапуска amavisd в journalctl нет строк MAILPANEL — "
-        "проверьте чтение /etc/mailpanel/amavis_custom_filters.conf пользователем amavis."
+    if "MAILPANEL: loaded" in tail:
+        return
+    raise ContentFilterError(
+        "custom_filters.conf не загрузился при старте amavisd "
+        "(в journalctl нет «MAILPANEL: loaded»). "
+        "Проверьте синтаксис /etc/mailpanel/amavis_custom_filters.conf"
     )
 
 
@@ -439,21 +440,6 @@ sub _match_literals {{
   return 0;
 }}
 
-sub mark_as_spam {{
-  my ($msginfo) = @_;
-  eval {{
-    require Amavis::Conf;
-    Amavis::Conf->import(':platform');
-    for my $r (@{{$msginfo->per_recip_data}}) {{
-      $r->add_contents_category(CC_SPAM, 0);
-    }}
-    $msginfo->add_contents_category(CC_SPAM, 0);
-  }};
-  if ($@) {{
-    Amavis::Util::do_log(0, "MAILPANEL: mark_as_spam skipped: %s", $@);
-  }}
-}}
-
 sub _subject_candidates {{
   my ($msginfo) = @_;
   my @values;
@@ -540,7 +526,6 @@ sub Amavis::Custom::checks {{
     $rl = 0 if !defined $rl || $rl eq '';
     $r->spam_level($rl + 100);
   }}
-  MailPanel::Filters::mark_as_spam($msginfo);
   Amavis::Util::do_log(0, "MAILPANEL: checks matched (%s) <%s>", $field, $msginfo->sender || '?');
 }}
 
@@ -557,7 +542,6 @@ sub Amavis::Custom::before_send {{
   $method = 'sql:spam-%m' unless defined $method && length $method;
   my $quar_to = $main::spam_quarantine_to;
   $quar_to = 'spam-quarantine@localhost' unless defined $quar_to && length $quar_to;
-  MailPanel::Filters::mark_as_spam($msginfo);
   eval {{ my $he = $msginfo->header_edits; }};
   my $quar_ok = 0;
   eval {{
@@ -812,7 +796,7 @@ def _diagnostics(filters: list[dict[str, Any]]) -> dict[str, Any]:
     amavis_hook_loaded = (
         MARKER_CUSTOM_HOOK_BEGIN in amavis_content
         and do_line in amavis_content
-        and "mark_as_spam" in custom_text
+        and "before_send quarantine" in custom_text
     )
     include_do_loaded = do_line in include_content
     sieve_path = dovecot_global_sieve_path()
@@ -860,7 +844,7 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
     custom_path.parent.mkdir(parents=True, exist_ok=True)
     if "MailPanel::Filters" not in custom_content:
         raise ContentFilterError("Сборка фильтров MailPanel не удалась.")
-    if "mark_as_spam" not in custom_content:
+    if "before_send quarantine" not in custom_content:
         raise ContentFilterError("Сборка quarantine hook MailPanel не удалась.")
     _write_readable(custom_path, custom_content)
 
@@ -917,9 +901,7 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
             f"Amavis не запустился после применения правил: {restart_error[:300]}. "
             f"Лог: {_amavisd_journal_tail()[:700]}"
         )
-    journal_warning = _check_amavis_mailpanel_journal(bool(_enabled_rules(filters)))
-    if journal_warning:
-        warnings.append(journal_warning)
+    _check_amavis_mailpanel_journal(bool(_enabled_rules(filters)))
     return warnings
 
 
