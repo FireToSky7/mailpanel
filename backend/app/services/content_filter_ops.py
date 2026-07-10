@@ -358,21 +358,19 @@ sub before_send {{
 """
 
 
-def _ensure_amavisd_custom_hook(content: str, custom_content: str) -> str:
-    block = f"{MARKER_CUSTOM_HOOK_BEGIN}\n{custom_content.rstrip()}\n{MARKER_CUSTOM_HOOK_END}"
+def _replace_hook_block(content: str, block: str) -> str:
     marker_pattern = (
         re.escape(MARKER_CUSTOM_HOOK_BEGIN) + r".*?" + re.escape(MARKER_CUSTOM_HOOK_END)
     )
-    # Remove legacy do-only hook blocks.
-    legacy_do = (
-        re.escape(MARKER_CUSTOM_HOOK_BEGIN)
-        + r"\ndo '[^']+';\n"
-        + re.escape(MARKER_CUSTOM_HOOK_END)
-    )
-    content = re.sub(legacy_do, block, content, count=1, flags=re.DOTALL)
     if re.search(marker_pattern, content, flags=re.DOTALL):
-        return re.sub(marker_pattern, block, content, count=1, flags=re.DOTALL)
+        # Use lambda so Perl literals like \Q...\E are not treated as re.sub escapes.
+        return re.sub(marker_pattern, lambda _: block, content, count=1, flags=re.DOTALL)
     return content.rstrip() + "\n\n" + block + "\n"
+
+
+def _ensure_amavisd_custom_hook(content: str, custom_content: str) -> str:
+    block = f"{MARKER_CUSTOM_HOOK_BEGIN}\n{custom_content.rstrip()}\n{MARKER_CUSTOM_HOOK_END}"
+    return _replace_hook_block(content, block)
 
 
 def _enabled_rules(filters: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -582,6 +580,11 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
     try:
         amavis_content = amavis_path.read_text(encoding="utf-8", errors="replace")
         amavis_content = _ensure_amavisd_custom_hook(amavis_content, custom_content)
+        if "package Amavis::Custom" not in amavis_content:
+            raise ContentFilterError(
+                "Не удалось встроить хук Amavis в amavisd.conf. "
+                "Проверьте маркеры MAILPANEL_CUSTOM_HOOK."
+            )
         amavis_path.write_text(amavis_content, encoding="utf-8")
     except OSError as exc:
         raise ContentFilterError(f"Не удалось обновить {amavis_path}: {exc}") from exc
