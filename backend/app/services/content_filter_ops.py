@@ -370,8 +370,6 @@ use strict;
 use warnings;
 no warnings qw(redefine uninitialized);
 
-use Amavis::Conf qw(:platform);
-
 package MailPanel::Filters;
 
 our @SUBJECT_PATTERNS = (
@@ -439,6 +437,21 @@ sub _match_literals {{
     }}
   }}
   return 0;
+}}
+
+sub mark_as_spam {{
+  my ($msginfo) = @_;
+  eval {{
+    require Amavis::Conf;
+    Amavis::Conf->import(':platform');
+    for my $r (@{{$msginfo->per_recip_data}}) {{
+      $r->add_contents_category(CC_SPAM, 0);
+    }}
+    $msginfo->add_contents_category(CC_SPAM, 0);
+  }};
+  if ($@) {{
+    Amavis::Util::do_log(0, "MAILPANEL: mark_as_spam skipped: %s", $@);
+  }}
 }}
 
 sub _subject_candidates {{
@@ -526,9 +539,8 @@ sub Amavis::Custom::checks {{
     my $rl = $r->spam_level;
     $rl = 0 if !defined $rl || $rl eq '';
     $r->spam_level($rl + 100);
-    $r->add_contents_category(CC_SPAM, 0);
   }}
-  $msginfo->add_contents_category(CC_SPAM, 0);
+  MailPanel::Filters::mark_as_spam($msginfo);
   Amavis::Util::do_log(0, "MAILPANEL: checks matched (%s) <%s>", $field, $msginfo->sender || '?');
 }}
 
@@ -545,10 +557,7 @@ sub Amavis::Custom::before_send {{
   $method = 'sql:spam-%m' unless defined $method && length $method;
   my $quar_to = $main::spam_quarantine_to;
   $quar_to = 'spam-quarantine@localhost' unless defined $quar_to && length $quar_to;
-  for my $r (@{{$msginfo->per_recip_data}}) {{
-    $r->add_contents_category(CC_SPAM, 0);
-  }}
-  $msginfo->add_contents_category(CC_SPAM, 0);
+  MailPanel::Filters::mark_as_spam($msginfo);
   eval {{ my $he = $msginfo->header_edits; }};
   my $quar_ok = 0;
   eval {{
@@ -803,7 +812,7 @@ def _diagnostics(filters: list[dict[str, Any]]) -> dict[str, Any]:
     amavis_hook_loaded = (
         MARKER_CUSTOM_HOOK_BEGIN in amavis_content
         and do_line in amavis_content
-        and "before_send quarantine" in custom_text
+        and "mark_as_spam" in custom_text
     )
     include_do_loaded = do_line in include_content
     sieve_path = dovecot_global_sieve_path()
@@ -851,7 +860,7 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
     custom_path.parent.mkdir(parents=True, exist_ok=True)
     if "MailPanel::Filters" not in custom_content:
         raise ContentFilterError("Сборка фильтров MailPanel не удалась.")
-    if "quarantine_match" not in custom_content and "before_send quarantine" not in custom_content:
+    if "mark_as_spam" not in custom_content:
         raise ContentFilterError("Сборка quarantine hook MailPanel не удалась.")
     _write_readable(custom_path, custom_content)
 
