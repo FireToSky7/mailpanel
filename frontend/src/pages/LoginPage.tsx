@@ -3,6 +3,7 @@ import { api, setSession } from '../api'
 import ToastStack from '../components/ToastStack'
 import { errorMessage } from '../errors'
 import { notify } from '../notify'
+import { toAppUrl } from '../paths'
 
 export default function LoginPage() {
   const [username, setUsername] = useState('')
@@ -15,7 +16,7 @@ export default function LoginPage() {
     try {
       const res = await api.login(username, password)
       setSession(res.access_token, { username, role: res.role, display_name: res.display_name })
-      window.location.href = '/'
+      window.location.href = toAppUrl('/')
     } catch (err) {
       notify.error(errorMessage(err))
     } finally {

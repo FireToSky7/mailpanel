@@ -1,6 +1,8 @@
 import { BrowserRouter, Navigate, Route, Routes, Link, useLocation } from 'react-router-dom'
 import { getToken, getUser, clearSession, canAccess } from './api'
+import ErrorBoundary from './components/ErrorBoundary'
 import ToastStack from './components/ToastStack'
+import { getBasename, toAppUrl } from './paths'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import MailboxesPage from './pages/MailboxesPage'
@@ -43,7 +45,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             <Link key={l.to} to={l.to} className={location.pathname === l.to ? 'active' : ''}>{l.label}</Link>
           ))}
         </nav>
-        <button className="secondary" style={{ width: '100%', marginTop: 20 }} onClick={() => { clearSession(); window.location.href = '/login' }}>Выйти</button>
+        <button className="secondary" style={{ width: '100%', marginTop: 20 }} onClick={() => { clearSession(); window.location.href = toAppUrl('/login') }}>Выйти</button>
       </aside>
       <main className="content">{children}</main>
       <ToastStack />
@@ -57,9 +59,11 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const basename = getBasename()
   return (
-    <BrowserRouter>
-      <Routes>
+    <ErrorBoundary>
+      <BrowserRouter basename={basename}>
+        <Routes>
         <Route path="/login" element={getToken() ? <Navigate to="/" replace /> : <LoginPage />} />
         <Route path="/" element={<PrivateRoute><DashboardPage /></PrivateRoute>} />
         <Route path="/mailboxes" element={<PrivateRoute><MailboxesPage /></PrivateRoute>} />
@@ -73,7 +77,8 @@ export default function App() {
         <Route path="/services" element={<PrivateRoute><ServicesPage /></PrivateRoute>} />
         <Route path="/panel-users" element={<PrivateRoute><PanelUsersPage /></PrivateRoute>} />
         <Route path="/portal" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BrowserRouter>
+        </Routes>
+      </BrowserRouter>
+    </ErrorBoundary>
   )
 }

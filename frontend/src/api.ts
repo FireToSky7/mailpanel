@@ -1,4 +1,5 @@
 import { formatApiError } from './errors'
+import { toAppUrl } from './paths'
 
 const TOKEN_KEY = 'mailpanel_token'
 const USER_KEY = 'mailpanel_user'
@@ -267,7 +268,13 @@ export function setSession(token: string, user: UserInfo) {
 
 export function getUser(): UserInfo | null {
   const raw = localStorage.getItem(USER_KEY)
-  return raw ? JSON.parse(raw) : null
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as UserInfo
+  } catch {
+    localStorage.removeItem(USER_KEY)
+    return null
+  }
 }
 
 export function clearSession() {
@@ -286,7 +293,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, { ...options, headers })
   if (res.status === 401) {
     clearSession()
-    window.location.href = '/login'
+    window.location.href = toAppUrl('/login')
     throw new Error('Unauthorized')
   }
   const data = await res.json().catch(() => ({}))

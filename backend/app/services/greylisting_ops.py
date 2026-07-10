@@ -247,7 +247,15 @@ def get_greylisting_overview() -> dict[str, Any]:
     whitelist_domains = _parse_whitelist_domains(domains_raw)
     whitelist_addresses = _parse_whitelist_addresses(whitelists_raw)
     timing = read_greylisting_timing()
-    stats = greylisting_stats()
+    try:
+        stats = greylisting_stats()
+    except Exception:
+        stats = {
+            "hours": 24,
+            "rejections": 0,
+            "top_senders": [],
+            "recent": [],
+        }
     return {
         "global_enabled": _infer_global_enabled(rules),
         "timing": timing,

@@ -365,7 +365,7 @@ export default function AntispamPage() {
           />
         </div>
       )}
-      {grey && (
+      {grey?.timing && (
         <div className="card">
           <div className="topbar" style={{ marginBottom: 12 }}>
             <h3 style={{ margin: 0 }}>Greylisting (серый список)</h3>
@@ -400,13 +400,13 @@ export default function AntispamPage() {
           </table>
           <p className="muted">Сообщение отклонения: {grey.timing.rejection_message}</p>
 
-          <h4 style={{ marginTop: 20 }}>Статистика за {grey.stats.hours} ч</h4>
-          <p className="muted">Отклонений по логам: <strong>{grey.stats.rejections}</strong></p>
-          {grey.stats.top_senders.length > 0 && (
+          <h4 style={{ marginTop: 20 }}>Статистика за {(grey.stats?.hours ?? 24)} ч</h4>
+          <p className="muted">Отклонений по логам: <strong>{grey.stats?.rejections ?? 0}</strong></p>
+          {(grey.stats?.top_senders?.length ?? 0) > 0 && (
             <>
               <p className="muted">Чаще всего задерживались:</p>
               <ul>
-                {grey.stats.top_senders.map((item) => (
+                {grey.stats!.top_senders.map((item) => (
                   <li key={item.address}>
                     {item.address} — {item.count}
                     {canWrite && (
@@ -424,7 +424,7 @@ export default function AntispamPage() {
               </ul>
             </>
           )}
-          {grey.stats.recent.length > 0 && (
+          {(grey.stats?.recent?.length ?? 0) > 0 && (
             <div className="table-scroll" style={{ marginTop: 12 }}>
               <table className="data-table">
                 <thead>
@@ -436,7 +436,7 @@ export default function AntispamPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {grey.stats.recent.map((row, index) => (
+                  {grey.stats!.recent.map((row, index) => (
                     <tr key={`${row.logged_at}-${index}`}>
                       <td>{row.logged_at}</td>
                       <td>{row.mail_from || '—'}</td>
@@ -450,7 +450,7 @@ export default function AntispamPage() {
           )}
 
           <h4 style={{ marginTop: 20 }}>Правила greylisting</h4>
-          {grey.rules.length ? (
+          {(grey.rules?.length ?? 0) ? (
             <div className="table-scroll">
               <table className="data-table">
                 <thead>
@@ -463,7 +463,7 @@ export default function AntispamPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {grey.rules.map((rule, index) => (
+                  {grey.rules!.map((rule, index) => (
                     <tr key={`${rule.from_addr}-${rule.to_addr}-${index}`}>
                       <td>
                         {rule.action === 'enabled' ? (
@@ -540,25 +540,25 @@ export default function AntispamPage() {
                 </button>
               </div>
               <EntryList
-                items={grey.whitelist_domains}
+                items={grey.whitelist_domains ?? []}
                 canRemove
                 onRemove={removeGreyWhitelistDomain}
                 emptyText="SPF-whitelist доменов нет"
               />
 
-              {grey.whitelist_addresses.length > 0 && (
+              {(grey.whitelist_addresses?.length ?? 0) > 0 && (
                 <>
                   <h4 style={{ marginTop: 20 }}>Разрешённые IP/сети</h4>
-                  <p className="muted">Подтянуты из SPF/MX зарегистрированных доменов ({grey.whitelist_addresses.length}).</p>
+                  <p className="muted">Подтянуты из SPF/MX зарегистрированных доменов ({grey.whitelist_addresses!.length}).</p>
                   <div className="log-box" style={{ maxHeight: 160, overflow: 'auto' }}>
-                    {grey.whitelist_addresses.join(', ')}
+                    {grey.whitelist_addresses!.join(', ')}
                   </div>
                 </>
               )}
             </>
           )}
 
-          {grey.notes.map((note) => (
+          {(grey.notes ?? []).map((note) => (
             <p key={note} className="muted" style={{ marginBottom: 4 }}>{note}</p>
           ))}
         </div>

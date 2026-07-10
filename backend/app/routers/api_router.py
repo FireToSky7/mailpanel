@@ -458,6 +458,8 @@ def get_greylisting():
         return get_greylisting_overview()
     except iredapd.IredapdError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"Greylisting: {exc}") from exc
 
 
 @router.get("/greylisting/stats", dependencies=[Depends(require_permission("antispam.read"))])
