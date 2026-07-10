@@ -139,11 +139,12 @@ def _sa_regex(pattern: str) -> str:
 
 
 def _perl_qr(pattern: str) -> str:
-    return f"qr/{re.escape(pattern)}/i"
+    safe = pattern.replace("\\", "\\\\").replace("\E", "\\E")
+    return f"qr/\\Q{safe}\\E/i"
 
 
 def _perl_qr_variants(pattern: str) -> list[str]:
-    """Plain, MIME-encoded and quoted-printable forms for Subject header matching."""
+    """Plain text and RFC2047 quoted-printable Subject forms."""
     variants: list[str] = []
     seen: set[str] = set()
 
@@ -155,24 +156,12 @@ def _perl_qr_variants(pattern: str) -> list[str]:
 
     add(pattern)
     try:
-        from email.header import Header
-
-        encoded = Header(pattern, "utf-8").encode()
-        if isinstance(encoded, bytes):
-            encoded = encoded.decode("ascii", errors="replace")
-        add(encoded)
-        add(encoded.replace("utf-8", "UTF-8"))
-    except Exception:
-        pass
-    try:
         import quopri
 
         qp = quopri.encodestring(pattern.encode("utf-8")).decode("ascii")
         qp = qp.replace("\n", "").strip().rstrip("=")
         add(f"=?UTF-8?Q?{qp}?=")
         add(f"=?utf-8?q?{qp}?=")
-        if any(ord(ch) > 127 for ch in pattern):
-            add(qp)
     except Exception:
         pass
     return variants
