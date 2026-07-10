@@ -550,8 +550,9 @@ sub Amavis::Custom::before_send {{
   }};
   if ($quar_ok) {{
     for my $r (@{{$msginfo->per_recip_data}}) {{
-      $r->recip_done(1);
+      $r->recip_destiny(&main::D_DISCARD);
       $r->recip_smtp_response('250 2.7.0 MailPanel content filter quarantine');
+      $r->recip_done(1);
     }}
     $self->{{quarantined}} = 1;
     Amavis::Util::do_log(0, "MAILPANEL: before_send quarantine (%s)", $field);
