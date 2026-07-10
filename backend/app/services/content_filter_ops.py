@@ -370,10 +370,6 @@ use strict;
 use warnings;
 no warnings qw(redefine uninitialized);
 
-BEGIN {{
-  import Amavis::Conf qw(:platform);
-}}
-
 package MailPanel::Filters;
 
 our @SUBJECT_PATTERNS = (
@@ -528,9 +524,10 @@ sub Amavis::Custom::checks {{
     my $rl = $r->spam_level;
     $rl = 0 if !defined $rl || $rl eq '';
     $r->spam_level($rl + 100);
-    $r->add_contents_category(CC_SPAM, 0);
+    $r->add_contents_category(&main::CC_SPAM, 0);
+    $r->recip_destiny(&main::D_QUARANTINE);
   }}
-  $msginfo->add_contents_category(CC_SPAM, 0);
+  $msginfo->add_contents_category(&main::CC_SPAM, 0);
   Amavis::Util::do_log(0, "MAILPANEL: checks matched (%s) <%s>", $field, $msginfo->sender || '?');
 }}
 
@@ -929,11 +926,6 @@ def list_content_filters() -> dict[str, Any]:
         notes.insert(
             0,
             "Хук Amavis не подключён в amavisd.conf — нажмите «Применить правила заново».",
-        )
-    if diagnostics["active_rules"] and not diagnostics.get("amavis_include_do_loaded"):
-        notes.insert(
-            0,
-            "Файл amavis_mailpanel.inc не содержит do custom_filters — нажмите «Применить правила заново».",
         )
     return {
         "items": filters,
