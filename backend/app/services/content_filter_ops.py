@@ -192,6 +192,7 @@ def _build_amavis_custom_filters(filters: list[dict[str, Any]]) -> str:
 foreach my $bank (keys %policy_bank) {
   next unless ref($policy_bank{$bank}) eq 'HASH';
   $policy_bank{$bank}{'bypass_virus_checks_maps'} = [1];
+  $policy_bank{$bank}{'bypass_spam_checks_maps'} = [0];
 }
 """
 
@@ -252,25 +253,22 @@ sub _apply_quarantine {{
   my ($msginfo, $matched_field) = @_;
   Amavis::load_policy_bank('MAILPANEL_CONTENT');
   $msginfo->add_contents_category(CC_SPAM, 999);
+  my $applied = 0;
   for my $r (@{{$msginfo->per_recip_data}}) {{
     next if $r->recip_done;
     $r->add_contents_category(CC_SPAM, 999);
     $r->spam_level(999);
+    $applied = 1;
     do_log(0, "MAILPANEL: content filter matched in %s for <%s>", $matched_field, $r->recip_addr);
   }}
+  do_log(0, "MAILPANEL: matched in %s but no recipients in per_recip_data", $matched_field)
+    unless $applied;
 }}
 
 sub new {{
   my ($class, $conn, $msginfo) = @_;
   return undef unless @MAILPANEL_SUBJECT_PATTERNS || @MAILPANEL_BODY_PATTERNS;
-  my ($field, $matched) = _match_patterns([_subject_candidates($msginfo)], \\@MAILPANEL_SUBJECT_PATTERNS, 'subject');
-  my $self = {{ matched => 0, matched_field => '' }};
-  if ($matched) {{
-    $self->{{matched}} = 1;
-    $self->{{matched_field}} = $field;
-    _apply_quarantine($msginfo, $field);
-  }}
-  bless $self, $class;
+  bless {{}}, $class;
 }}
 
 sub _decode_header {{
@@ -311,7 +309,7 @@ sub _read_body_sample {{
 
 sub checks {{
   my ($self, $conn, $msginfo) = @_;
-  return if $self->{{matched}};
+  do_log(0, "MAILPANEL: checks() for <%s>", $msginfo->sender || '?');
 
   my ($field, $matched) = _match_patterns([_subject_candidates($msginfo)], \\@MAILPANEL_SUBJECT_PATTERNS, 'subject');
   if (!$matched && @MAILPANEL_BODY_PATTERNS) {{
@@ -320,8 +318,6 @@ sub checks {{
   }}
   return unless $matched;
 
-  $self->{{matched}} = 1;
-  $self->{{matched_field}} = $field;
   _apply_quarantine($msginfo, $field);
 }}
 
