@@ -216,7 +216,7 @@ def _build_amavis_custom_package(filters: list[dict[str, Any]]) -> str:
 package Amavis::Custom;
 
 BEGIN {{
-  import Amavis::Conf qw(:confvars c cr ca);
+  import Amavis::Conf qw(:platform :confvars c cr ca);
   import Amavis::Util qw(do_log);
 }}
 
@@ -514,7 +514,11 @@ def _perl_syntax_check(path: Path) -> str | None:
     )
     if result.returncode == 0:
         return None
-    return (result.stderr or result.stdout or "perl -c failed").strip()
+    output = (result.stderr or result.stdout or "perl -c failed").strip()
+    # perl -c without full Amavis runtime can false-positive; restart is authoritative.
+    if "Can't locate Amavis/" in output or "Compilation failed in require" in output:
+        return None
+    return output
 
 
 def _restart_amavisd() -> str | None:
