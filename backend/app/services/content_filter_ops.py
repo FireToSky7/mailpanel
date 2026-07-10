@@ -719,6 +719,16 @@ def _diagnostics(filters: list[dict[str, Any]]) -> dict[str, Any]:
     amavis_content = amavis_path.read_text(encoding="utf-8", errors="replace") if amavis_path.is_file() else ""
     do_line = f"do '{custom_path.as_posix()}';"
     custom_text = custom_path.read_text(encoding="utf-8", errors="replace") if custom_path.is_file() else ""
+    include_path = None
+    include_content = ""
+    try:
+        from app.services.amavis_policy import amavis_include_path
+
+        include_path = amavis_include_path()
+        if include_path.is_file():
+            include_content = include_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     amavis_hook_loaded = (
         MARKER_CUSTOM_HOOK_BEGIN in amavis_content
         and do_line in amavis_content
@@ -736,16 +746,6 @@ def _diagnostics(filters: list[dict[str, Any]]) -> dict[str, Any]:
     except Exception:
         scan_internal_mail = False
     subject_patterns, body_patterns = _count_patterns_in_custom_file(custom_path)
-    include_path = None
-    include_content = ""
-    try:
-        from app.services.amavis_policy import amavis_include_path
-
-        include_path = amavis_include_path()
-        if include_path.is_file():
-            include_content = include_path.read_text(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
     return {
         "local_cf": str(local_cf),
         "local_cf_exists": local_cf.is_file(),
