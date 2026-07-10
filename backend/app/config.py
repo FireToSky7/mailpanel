@@ -76,6 +76,8 @@ class PathsConfig(BaseModel):
     content_filters_file: str = "/etc/mailpanel/content_filters.yaml"
     spamassassin_filters_file: str = "/etc/mail/spamassassin/mailpanel_filters.cf"
     amavis_custom_filters_file: str = "/etc/mailpanel/amavis_custom_filters.conf"
+    amavis_late_policy_file: str = "/etc/mailpanel/amavis_late_policy.inc"
+    dovecot_global_sieve: str = "/var/vmail/sieve/dovecot.sieve"
 
 
 class LogCollectorConfig(BaseModel):

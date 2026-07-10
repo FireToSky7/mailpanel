@@ -40,6 +40,8 @@ paths:
   content_filters_file: "/etc/mailpanel/content_filters.yaml"
   spamassassin_filters_file: "/etc/mail/spamassassin/mailpanel_filters.cf"
   amavis_custom_filters_file: "/etc/mailpanel/amavis_custom_filters.conf"
+  amavis_late_policy_file: "/etc/mailpanel/amavis_late_policy.inc"
+  dovecot_global_sieve: "/var/vmail/sieve/dovecot.sieve"
   maillog: "/var/log/maillog"
   iredapd_log: "/var/log/iredapd/iredapd.log"
   dovecot_log: "/var/log/dovecot/dovecot.log"

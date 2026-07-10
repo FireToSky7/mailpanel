@@ -15,6 +15,8 @@ MARKER_FILTERS_END = "# MAILPANEL_FILTERS_END"
 MARKER_SA_RULES_BEGIN = "# MAILPANEL_SA_FILTERS_BEGIN"
 MARKER_SA_RULES_END = "# MAILPANEL_SA_FILTERS_END"
 MARKER_CUSTOM_HOOK_BEGIN = "# MAILPANEL_CUSTOM_HOOK_BEGIN"
+MARKER_SIEVE_BEGIN = "# MAILPANEL_SIEVE_BEGIN"
+MARKER_SIEVE_END = "# MAILPANEL_SIEVE_END"
 MARKER_CUSTOM_HOOK_END = "# MAILPANEL_CUSTOM_HOOK_END"
 
 FILTER_SCORE = 100.0
@@ -52,6 +54,12 @@ def amavis_late_policy_path() -> Path:
     default = Path("/etc/mailpanel/amavis_late_policy.inc")
     configured = getattr(get_config().paths, "amavis_late_policy_file", None)
     return Path(configured) if configured else default
+
+
+def dovecot_global_sieve_path() -> Path:
+    default = Path("/var/vmail/sieve/dovecot.sieve")
+    configured = getattr(get_config().paths, "dovecot_global_sieve", str(default))
+    return Path(configured)
 
 
 def amavisd_config_path() -> Path:
@@ -173,6 +181,127 @@ def _perl_qr_variants(pattern: str) -> list[str]:
     return variants
 
 
+def _sieve_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _build_sieve_block(filters: list[dict[str, Any]]) -> str:
+    conditions: list[str] = []
+    needs_body = False
+    for rule in _enabled_rules(filters):
+        normalized = _normalize_filter(rule)
+        pattern = _sieve_escape(normalized["pattern"])
+        if normalized["field"] == "subject":
+            conditions.append(f'  header :mime :contains "Subject" "{pattern}",')
+            conditions.append(f'  header :contains "Subject" "{pattern}",')
+        else:
+            needs_body = True
+            conditions.append(f'  body :contains "{pattern}",')
+    if not conditions:
+        return ""
+    requires = ["fileinto"]
+    if needs_body:
+        requires.append("body")
+    req = ", ".join(f'"{item}"' for item in requires)
+    cond = "\n".join(conditions)
+    return f"""{MARKER_SIEVE_BEGIN}
+require [{req}];
+if anyof (
+{cond}
+) {{
+  fileinto "Junk";
+  stop;
+}}
+{MARKER_SIEVE_END}
+"""
+
+
+def _ensure_dovecot_sieve_block(filters: list[dict[str, Any]]) -> list[str]:
+    warnings: list[str] = []
+    block = _build_sieve_block(filters)
+    sieve_path = dovecot_global_sieve_path()
+    if not block:
+        if sieve_path.is_file():
+            content = sieve_path.read_text(encoding="utf-8", errors="replace")
+            if MARKER_SIEVE_BEGIN in content:
+                content = re.sub(
+                    re.escape(MARKER_SIEVE_BEGIN) + r".*?" + re.escape(MARKER_SIEVE_END) + r"\n?",
+                    "",
+                    content,
+                    count=1,
+                    flags=re.DOTALL,
+                )
+                sieve_path.write_text(content.rstrip() + "\n", encoding="utf-8")
+        return warnings
+
+    sieve_path.parent.mkdir(parents=True, exist_ok=True)
+    if not sieve_path.is_file():
+        sample = sieve_path.parent / "dovecot.sieve.sample"
+        if sample.is_file():
+            sieve_path.write_text(sample.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+        else:
+            sieve_path.write_text('require ["fileinto"];\n', encoding="utf-8")
+
+    content = sieve_path.read_text(encoding="utf-8", errors="replace")
+    if MARKER_SIEVE_BEGIN in content and MARKER_SIEVE_END in content:
+        content = re.sub(
+            re.escape(MARKER_SIEVE_BEGIN) + r".*?" + re.escape(MARKER_SIEVE_END),
+            block.strip(),
+            content,
+            count=1,
+            flags=re.DOTALL,
+        )
+    else:
+        content = content.rstrip() + "\n\n" + block + "\n"
+    sieve_path.write_text(content, encoding="utf-8")
+    try:
+        sieve_path.chmod(0o644)
+    except OSError:
+        pass
+
+    compile_result = subprocess.run(
+        ["sievec", str(sieve_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if compile_result.returncode != 0:
+        detail = (compile_result.stderr or compile_result.stdout or "sievec failed").strip()
+        warnings.append(f"Проверка sievec: {detail[:300]}")
+    restart = subprocess.run(
+        ["systemctl", "restart", "dovecot"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    if restart.returncode != 0:
+        warnings.append("Не удалось перезапустить dovecot после обновления sieve.")
+    return warnings
+
+
+def _write_readable(path: Path, content: str, mode: int = 0o644) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    try:
+        path.chmod(mode)
+    except OSError:
+        pass
+
+
+def _check_amavis_mailpanel_journal(active: bool) -> str | None:
+    if not active:
+        return None
+    tail = _amavisd_journal_tail(40)
+    if "MAILPANEL:" in tail:
+        return None
+    return (
+        "После перезапуска amavisd в journalctl нет строк MAILPANEL — "
+        "проверьте чтение /etc/mailpanel/amavis_custom_filters.conf пользователем amavis."
+    )
+
+
 def _build_amavis_late_policy(filters: list[dict[str, Any]]) -> str:
     if not _enabled_rules(filters):
         return ""
@@ -184,6 +313,8 @@ foreach my $bank (keys %policy_bank) {
   next unless ref($policy_bank{$bank}) eq 'HASH';
   $policy_bank{$bank}{'bypass_spam_checks_maps'} = [0];
 }
+unshift @spam_scanners, ['MailPanel', 'Amavis::SpamControl::MailPanel'];
+warn "MAILPANEL: late policy loaded\\n";
 """
 
 
@@ -323,8 +454,6 @@ sub check {{
   $msginfo->add_contents_category(&main::CC_SPAM, 0);
   Amavis::Util::do_log(0, "MAILPANEL: scanner (%s) <%s> score=%s", $field, $msginfo->sender || '?', $prev + $score);
 }}
-
-unshift @spam_scanners, ['MailPanel', 'Amavis::SpamControl::MailPanel'];
 
 sub Amavis::Custom::new {{
   my ($class, $conn, $msginfo) = @_;
@@ -595,6 +724,10 @@ def _diagnostics(filters: list[dict[str, Any]]) -> dict[str, Any]:
         and do_line in amavis_content
         and "Amavis::SpamControl::MailPanel" in custom_text
     )
+    include_do_loaded = do_line in include_content
+    sieve_path = dovecot_global_sieve_path()
+    sieve_content = sieve_path.read_text(encoding="utf-8", errors="replace") if sieve_path.is_file() else ""
+    sieve_loaded = MARKER_SIEVE_BEGIN in sieve_content and MARKER_SIEVE_END in sieve_content
     scan_internal_mail = False
     try:
         from app.services import amavis_policy
@@ -620,6 +753,9 @@ def _diagnostics(filters: list[dict[str, Any]]) -> dict[str, Any]:
         "amavis_custom_file": str(custom_path),
         "amavis_custom_exists": custom_path.is_file(),
         "amavis_hook_loaded": amavis_hook_loaded,
+        "amavis_include_do_loaded": include_do_loaded,
+        "sieve_file": str(sieve_path),
+        "sieve_loaded": sieve_loaded,
         "amavisd_active": _amavisd_active(),
         "hook_subject_patterns": subject_patterns,
         "hook_body_patterns": body_patterns,
@@ -646,13 +782,12 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
         raise ContentFilterError("Сборка фильтров MailPanel не удалась.")
     if "Amavis::SpamControl::MailPanel" not in custom_content:
         raise ContentFilterError("Сборка spam-scanner MailPanel не удалась.")
-    custom_path.write_text(custom_content, encoding="utf-8")
+    _write_readable(custom_path, custom_content)
 
     late_path = amavis_late_policy_path()
-    late_path.parent.mkdir(parents=True, exist_ok=True)
     late_content = _build_amavis_late_policy(filters)
     if late_content:
-        late_path.write_text(late_content, encoding="utf-8")
+        _write_readable(late_path, late_content)
     elif late_path.is_file():
         late_path.unlink()
 
@@ -690,6 +825,7 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
         warnings.append(f"SpamAssassin local.cf не найден ({local_cf}), используется хук Amavis.")
 
     warnings.extend(_sync_amavis_policy(filters))
+    warnings.extend(_ensure_dovecot_sieve_block(filters))
     restart_error = _restart_amavisd()
     if restart_error:
         try:
@@ -701,6 +837,9 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
             f"Amavis не запустился после применения правил: {restart_error[:300]}. "
             f"Лог: {_amavisd_journal_tail()[:700]}"
         )
+    journal_warning = _check_amavis_mailpanel_journal(bool(_enabled_rules(filters)))
+    if journal_warning:
+        warnings.append(journal_warning)
     return warnings
 
 
@@ -710,6 +849,7 @@ def list_content_filters() -> dict[str, Any]:
     diagnostics = _diagnostics(raw_filters)
     notes = [
         "Правила работают через хук Amavis (включая письма между ящиками на сервере).",
+        "Для внутренней почты дополнительно применяется глобальный Sieve (папка Junk).",
         "При совпадении Amavis переключает политику на карантин (обход MYUSERS D_PASS).",
         "Дополнительно дублируются в SpamAssassin для внешней почты.",
         "При совпадении письмо попадает в карантин (тип «Спам»).",
@@ -720,6 +860,11 @@ def list_content_filters() -> dict[str, Any]:
         notes.insert(
             0,
             "Хук Amavis не подключён в amavisd.conf — нажмите «Применить правила заново».",
+        )
+    if diagnostics["active_rules"] and not diagnostics.get("amavis_include_do_loaded"):
+        notes.insert(
+            0,
+            "Файл amavis_mailpanel.inc не содержит do custom_filters — нажмите «Применить правила заново».",
         )
     return {
         "items": filters,
