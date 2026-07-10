@@ -452,7 +452,7 @@ def delete_wblist(
     return {"ok": True}
 
 
-@router.get("/greylisting", dependencies=[Depends(require_permission("antispam.read"))])
+@router.get("/greylisting", dependencies=[Depends(require_permission("greylisting.read"))])
 def get_greylisting():
     try:
         return get_greylisting_overview()
@@ -462,7 +462,7 @@ def get_greylisting():
         raise HTTPException(500, f"Greylisting: {exc}") from exc
 
 
-@router.get("/greylisting/stats", dependencies=[Depends(require_permission("antispam.read"))])
+@router.get("/greylisting/stats", dependencies=[Depends(require_permission("greylisting.read"))])
 def get_greylisting_stats(hours: int = 24):
     try:
         return greylisting_stats(hours=hours)
@@ -470,11 +470,11 @@ def get_greylisting_stats(hours: int = 24):
         raise HTTPException(400, str(exc)) from exc
 
 
-@router.post("/greylisting/disable", dependencies=[Depends(require_permission("antispam.write"))])
+@router.post("/greylisting/disable", dependencies=[Depends(require_permission("greylisting.write"))])
 def grey_disable(
     payload: GreylistRequest,
     request: Request,
-    user: PanelUser = Depends(require_permission("antispam.write")),
+    user: PanelUser = Depends(require_permission("greylisting.write")),
 ):
     try:
         iredapd.greylisting_disable(payload.to_addr, payload.from_addr)
@@ -484,11 +484,11 @@ def grey_disable(
     return {"ok": True}
 
 
-@router.post("/greylisting/enable", dependencies=[Depends(require_permission("antispam.write"))])
+@router.post("/greylisting/enable", dependencies=[Depends(require_permission("greylisting.write"))])
 def grey_enable(
     payload: GreylistRequest,
     request: Request,
-    user: PanelUser = Depends(require_permission("antispam.write")),
+    user: PanelUser = Depends(require_permission("greylisting.write")),
 ):
     try:
         iredapd.greylisting_enable(payload.to_addr, payload.from_addr)
@@ -498,11 +498,11 @@ def grey_enable(
     return {"ok": True}
 
 
-@router.post("/greylisting/delete-rule", dependencies=[Depends(require_permission("antispam.write"))])
+@router.post("/greylisting/delete-rule", dependencies=[Depends(require_permission("greylisting.write"))])
 def grey_delete_rule(
     payload: GreylistRequest,
     request: Request,
-    user: PanelUser = Depends(require_permission("antispam.write")),
+    user: PanelUser = Depends(require_permission("greylisting.write")),
 ):
     try:
         iredapd.greylisting_delete(payload.to_addr, payload.from_addr)
@@ -512,11 +512,11 @@ def grey_delete_rule(
     return {"ok": True}
 
 
-@router.post("/greylisting/whitelist-domain", dependencies=[Depends(require_permission("antispam.write"))])
+@router.post("/greylisting/whitelist-domain", dependencies=[Depends(require_permission("greylisting.write"))])
 def grey_whitelist_domain(
     payload: GreylistDomainRequest,
     request: Request,
-    user: PanelUser = Depends(require_permission("antispam.write")),
+    user: PanelUser = Depends(require_permission("greylisting.write")),
 ):
     domain = payload.domain if payload.domain.startswith("@") else f"@{payload.domain}"
     try:
@@ -527,11 +527,11 @@ def grey_whitelist_domain(
     return {"ok": True}
 
 
-@router.post("/greylisting/remove-whitelist-domain", dependencies=[Depends(require_permission("antispam.write"))])
+@router.post("/greylisting/remove-whitelist-domain", dependencies=[Depends(require_permission("greylisting.write"))])
 def grey_remove_whitelist_domain(
     payload: GreylistDomainRequest,
     request: Request,
-    user: PanelUser = Depends(require_permission("antispam.write")),
+    user: PanelUser = Depends(require_permission("greylisting.write")),
 ):
     domain = payload.domain if payload.domain.startswith("@") else f"@{payload.domain}"
     try:
@@ -542,10 +542,10 @@ def grey_remove_whitelist_domain(
     return {"ok": True}
 
 
-@router.post("/greylisting/sync-spf", dependencies=[Depends(require_permission("antispam.write"))])
+@router.post("/greylisting/sync-spf", dependencies=[Depends(require_permission("greylisting.write"))])
 def grey_sync_spf(
     request: Request,
-    user: PanelUser = Depends(require_permission("antispam.write")),
+    user: PanelUser = Depends(require_permission("greylisting.write")),
 ):
     try:
         message = iredapd.sync_spf_greylist_whitelists()

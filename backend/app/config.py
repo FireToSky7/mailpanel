@@ -31,6 +31,8 @@ PERMISSIONS: dict[str, set[Role]] = {
     "mail.write": {Role.SUPERADMIN, Role.ADMIN},
     "antispam.read": {Role.SUPERADMIN, Role.ADMIN, Role.VIEWER},
     "antispam.write": {Role.SUPERADMIN, Role.ADMIN},
+    "greylisting.read": {Role.SUPERADMIN, Role.ADMIN, Role.VIEWER},
+    "greylisting.write": {Role.SUPERADMIN, Role.ADMIN},
     "logs.read": {Role.SUPERADMIN, Role.ADMIN, Role.VIEWER},
     "services.read": {Role.SUPERADMIN, Role.ADMIN, Role.VIEWER},
     "services.restart": {Role.SUPERADMIN, Role.ADMIN},

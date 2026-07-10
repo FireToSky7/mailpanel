@@ -9,6 +9,7 @@ import MailboxesPage from './pages/MailboxesPage'
 import AliasesPage from './pages/AliasesPage'
 import GroupsPage from './pages/GroupsPage'
 import AntispamPage from './pages/AntispamPage'
+import GreylistingPage from './pages/GreylistingPage'
 import RulesPage from './pages/RulesPage'
 import QuarantinePage from './pages/QuarantinePage'
 import QueuePage from './pages/QueuePage'
@@ -27,6 +28,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     { to: '/aliases', label: 'Алиасы', section: 'aliases' },
     { to: '/groups', label: 'Группы', section: 'groups' },
     { to: '/antispam', label: 'Антиспам', section: 'antispam' },
+    { to: '/greylisting', label: 'Greylisting', section: 'greylisting' },
     { to: '/rules', label: 'Правила', section: 'rules' },
     { to: '/quarantine', label: 'Карантин', section: 'quarantine' },
     { to: '/queue', label: 'Очередь', section: 'queue' },
@@ -70,6 +72,7 @@ export default function App() {
         <Route path="/aliases" element={<PrivateRoute><AliasesPage /></PrivateRoute>} />
         <Route path="/groups" element={<PrivateRoute><GroupsPage /></PrivateRoute>} />
         <Route path="/antispam" element={<PrivateRoute><AntispamPage /></PrivateRoute>} />
+        <Route path="/greylisting" element={<PrivateRoute><GreylistingPage /></PrivateRoute>} />
         <Route path="/rules" element={<PrivateRoute><RulesPage /></PrivateRoute>} />
         <Route path="/quarantine" element={<PrivateRoute><QuarantinePage /></PrivateRoute>} />
         <Route path="/queue" element={<PrivateRoute><QueuePage /></PrivateRoute>} />

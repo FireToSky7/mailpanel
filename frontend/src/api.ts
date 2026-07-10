@@ -499,6 +499,7 @@ export function canAccess(role: string, section: string): boolean {
     aliases: ['superadmin', 'admin', 'viewer'],
     groups: ['superadmin', 'admin', 'viewer'],
     antispam: ['superadmin', 'admin', 'viewer'],
+    greylisting: ['superadmin', 'admin', 'viewer'],
     rules: ['superadmin', 'admin', 'viewer'],
     quarantine: ['superadmin', 'admin', 'viewer'],
     queue: ['superadmin', 'admin'],
