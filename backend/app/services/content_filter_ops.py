@@ -154,7 +154,7 @@ def _sa_regex(pattern: str) -> str:
 
 def _perl_qr(pattern: str) -> str:
     safe = pattern.replace("\\", "\\\\").replace("\\E", "\\\\E")
-    return f"qr/\\Q{safe}\\E/i"
+    return f"qr/\\Q{safe}\\E/iu"
 
 
 def _perl_qr_variants(pattern: str) -> list[str]:
@@ -186,7 +186,7 @@ def _sieve_escape(text: str) -> str:
 
 
 def _sieve_required_extensions(filters: list[dict[str, Any]]) -> list[str]:
-    extensions = ["fileinto"]
+    extensions = ["fileinto", "comparator-i;unicode-casemap"]
     for rule in _enabled_rules(filters):
         if _normalize_filter(rule)["field"] == "body":
             extensions.append("body")
@@ -222,9 +222,13 @@ def _build_sieve_block(filters: list[dict[str, Any]]) -> str:
         normalized = _normalize_filter(rule)
         pattern = _sieve_escape(normalized["pattern"])
         if normalized["field"] == "subject":
-            conditions.append(f'  header :contains "Subject" "{pattern}"')
+            conditions.append(
+                f'  header :comparator "i;unicode-casemap" :contains "Subject" "{pattern}"'
+            )
         else:
-            conditions.append(f'  body :contains "{pattern}"')
+            conditions.append(
+                f'  body :comparator "i;unicode-casemap" :contains "{pattern}"'
+            )
     if not conditions:
         return ""
     cond = ",\n".join(conditions)
@@ -369,6 +373,8 @@ def _build_amavis_custom_package(filters: list[dict[str, Any]]) -> str:
 use utf8;
 use strict;
 use warnings;
+use feature 'fc';
+use Encode qw(decode_utf8);
 no warnings qw(redefine uninitialized);
 
 package MailPanel::Filters;
@@ -384,6 +390,19 @@ our @SUBJECT_LITERALS = (
 our @BODY_PATTERNS = (
 {body_block}
 );
+
+sub _to_utf8 {{
+  my ($value) = @_;
+  return '' unless defined $value && length $value;
+  return $value if utf8::is_utf8($value);
+  eval {{ decode_utf8($value, Encode::FB_DEFAULT) }} // $value;
+}}
+
+sub _fold_case {{
+  my ($value) = @_;
+  my $text = _to_utf8($value);
+  return fc($text);
+}}
 
 sub _decode_header {{
   my ($value) = @_;
@@ -427,13 +446,13 @@ sub _match_literals {{
   return 0 unless $values && $literals && @$literals;
   for my $literal (@$literals) {{
     next unless defined $literal && length $literal;
-    my $needle = lc $literal;
+    my $needle = _fold_case($literal);
     for my $value (@$values) {{
       next unless defined $value && length $value;
       my $decoded = _decode_header($value);
       for my $candidate ($value, $decoded) {{
         next unless defined $candidate && length $candidate;
-        return 1 if index(lc($candidate), $needle) >= 0;
+        return 1 if index(_fold_case($candidate), $needle) >= 0;
       }}
     }}
   }}
@@ -465,8 +484,16 @@ sub _match_patterns {{
   $field_name = 'subject' unless defined $field_name && length $field_name;
   return ('', 0) unless $values && @$patterns;
   for my $value (@$values) {{
-    for my $pat (@$patterns) {{
-      return ($field_name, 1) if $value =~ $pat;
+    my @candidates = ($value);
+    if ($field_name eq 'subject') {{
+      my $decoded = _decode_header($value);
+      push @candidates, $decoded if length $decoded;
+    }}
+    for my $candidate (@candidates) {{
+      my $text = _to_utf8($candidate);
+      for my $pat (@$patterns) {{
+        return ($field_name, 1) if $text =~ $pat;
+      }}
     }}
   }}
   return ('', 0);
