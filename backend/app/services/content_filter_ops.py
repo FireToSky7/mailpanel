@@ -337,7 +337,6 @@ foreach my $bank (keys %policy_bank) {
   next unless ref($policy_bank{$bank}) eq 'HASH';
   $policy_bank{$bank}{'bypass_spam_checks_maps'} = [0];
 }
-unshift @spam_scanners, ['MailPanel', 'Amavis::SpamControl::MailPanel'];
 warn "MAILPANEL: late policy loaded\\n";
 """
 
@@ -385,6 +384,22 @@ our @BODY_PATTERNS = (
 {body_block}
 );
 
+sub _decode_header {{
+  my ($value) = @_;
+  return '' unless defined $value;
+  local $1;
+  $value =~ s/\\n([ \\t])/$1/sg;
+  $value =~ s/^[ \\t]+//s;
+  $value =~ s/[ \\t]+\\z//s;
+  my $raw = $value;
+  eval {{
+    require MIME::Words;
+    my $decoded = MIME::Words::decode_mime_words($raw);
+    $value = $decoded if defined $decoded && length $decoded;
+  }};
+  return $value;
+}}
+
 sub _subject_from_mail_file {{
   my ($msginfo) = @_;
   my @values;
@@ -426,9 +441,9 @@ sub _match_literals {{
 
 sub quarantine_match {{
   my ($self, $conn, $msginfo, $field, $stage) = @_;
-  my $method = $spam_quarantine_method;
+  my $method = $main::spam_quarantine_method;
   $method = 'sql:spam-%m' unless defined $method && length $method;
-  my $quar_to = $spam_quarantine_to;
+  my $quar_to = $main::spam_quarantine_to;
   $quar_to = 'spam-quarantine@localhost' unless defined $quar_to && length $quar_to;
   Amavis::load_policy_bank('MAILPANEL_CONTENT');
   for my $r (@{{$msginfo->per_recip_data}}) {{
@@ -447,22 +462,6 @@ sub quarantine_match {{
     }}
   }}
   return $self->{{quarantined}};
-}}
-
-sub _decode_header {{
-  my ($value) = @_;
-  return '' unless defined $value;
-  local $1;
-  $value =~ s/\\n([ \\t])/$1/sg;
-  $value =~ s/^[ \\t]+//s;
-  $value =~ s/[ \\t]+\\z//s;
-  my $raw = $value;
-  eval {{
-    require MIME::Words;
-    my $decoded = MIME::Words::decode_mime_words($raw);
-    $value = $decoded if defined $decoded && length $decoded;
-  }};
-  return $value;
 }}
 
 sub _subject_candidates {{
@@ -531,30 +530,7 @@ sub match_mail {{
   return ($field, $matched);
 }}
 
-package Amavis::SpamControl::MailPanel;
-
-sub new {{
-  bless {{}}, shift;
-}}
-
-sub check {{
-  my ($self, $conn, $msginfo) = @_;
-  my ($field, $matched) = MailPanel::Filters::match_mail($msginfo);
-  return unless $matched;
-  my $score = 100;
-  for my $r (@{{$msginfo->per_recip_data}}) {{
-    my $rl = $r->spam_level;
-    $rl = 0 if !defined $rl || $rl eq '';
-    $r->spam_level($rl + $score);
-    $r->add_contents_category(&main::CC_SPAM, 0);
-  }}
-  my $tests = $msginfo->spam_status;
-  $tests = '' if !defined $tests;
-  my $tag = 'MAILPANEL=1';
-  $msginfo->spam_status($tests eq '' ? $tag : "$tests,$tag");
-  $msginfo->add_contents_category(&main::CC_SPAM, 0);
-  Amavis::Util::do_log(0, "MAILPANEL: scanner (%s) <%s> score=%s", $field, $msginfo->sender || '?', $score);
-}}
+package main;
 
 sub Amavis::Custom::new {{
   my ($class, $conn, $msginfo) = @_;
@@ -814,7 +790,7 @@ def _diagnostics(filters: list[dict[str, Any]]) -> dict[str, Any]:
     amavis_hook_loaded = (
         MARKER_CUSTOM_HOOK_BEGIN in amavis_content
         and do_line in amavis_content
-        and "Amavis::SpamControl::MailPanel" in custom_text
+        and "quarantine_match" in custom_text
     )
     include_do_loaded = do_line in include_content
     sieve_path = dovecot_global_sieve_path()
@@ -862,8 +838,8 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
     custom_path.parent.mkdir(parents=True, exist_ok=True)
     if "MailPanel::Filters" not in custom_content:
         raise ContentFilterError("Сборка фильтров MailPanel не удалась.")
-    if "Amavis::SpamControl::MailPanel" not in custom_content:
-        raise ContentFilterError("Сборка spam-scanner MailPanel не удалась.")
+    if "quarantine_match" not in custom_content:
+        raise ContentFilterError("Сборка quarantine hook MailPanel не удалась.")
     _write_readable(custom_path, custom_content)
 
     late_path = amavis_late_policy_path()
