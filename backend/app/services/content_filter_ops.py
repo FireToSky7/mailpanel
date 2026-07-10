@@ -142,16 +142,52 @@ def _perl_qr(pattern: str) -> str:
     return f"qr/{re.escape(pattern)}/i"
 
 
+def _perl_qr_variants(pattern: str) -> list[str]:
+    """Plain, MIME-encoded and quoted-printable forms for Subject header matching."""
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        if not value or value in seen:
+            return
+        seen.add(value)
+        variants.append(_perl_qr(value))
+
+    add(pattern)
+    try:
+        from email.header import Header
+
+        encoded = Header(pattern, "utf-8").encode()
+        if isinstance(encoded, bytes):
+            encoded = encoded.decode("ascii", errors="replace")
+        add(encoded)
+        add(encoded.replace("utf-8", "UTF-8"))
+    except Exception:
+        pass
+    try:
+        import quopri
+
+        qp = quopri.encodestring(pattern.encode("utf-8")).decode("ascii")
+        qp = qp.replace("\n", "").strip().rstrip("=")
+        add(f"=?UTF-8?Q?{qp}?=")
+        add(f"=?utf-8?q?{qp}?=")
+        if any(ord(ch) > 127 for ch in pattern):
+            add(qp)
+    except Exception:
+        pass
+    return variants
+
+
 def _build_amavis_custom_filters(filters: list[dict[str, Any]]) -> str:
     subject_patterns: list[str] = []
     body_patterns: list[str] = []
     for rule in _enabled_rules(filters):
         normalized = _normalize_filter(rule)
-        perl_qr = _perl_qr(normalized["pattern"])
+        perl_patterns = _perl_qr_variants(normalized["pattern"])
         if normalized["field"] == "subject":
-            subject_patterns.append(perl_qr)
+            subject_patterns.extend(perl_patterns)
         else:
-            body_patterns.append(perl_qr)
+            body_patterns.append(_perl_qr(normalized["pattern"]))
 
     subject_block = "\n".join(f"  {item}," for item in subject_patterns) or ""
     body_block = "\n".join(f"  {item}," for item in body_patterns) or ""
@@ -167,6 +203,7 @@ $policy_bank{{'MAILPANEL_CONTENT'}} = {{
 
 package Amavis::Custom;
 
+use utf8;
 use strict;
 use warnings;
 no warnings qw(uninitialized redefine);
@@ -181,17 +218,56 @@ our @MAILPANEL_BODY_PATTERNS = (
 {body_block}
 );
 
+sub _subject_candidates {{
+  my ($msginfo) = @_;
+  my @values;
+  my $raw = $msginfo->get_header_field_body('subject');
+  push @values, $raw if defined $raw && length $raw;
+  my @header = $msginfo->get_header_field('Subject');
+  if (@header) {{
+    my $joined = join(' ', @header);
+    push @values, $joined if length $joined;
+  }}
+  push @values, _decode_header($raw) if defined $raw;
+  my %seen;
+  return grep {{ defined $_ && length $_ && !$seen{{$_}}++ }} @values;
+}}
+
+sub _match_patterns {{
+  my ($values, $patterns, $field_name) = @_;
+  $field_name = 'subject' unless defined $field_name && length $field_name;
+  return ('', 0) unless $values && @$patterns;
+  for my $value (@$values) {{
+    for my $pat (@$patterns) {{
+      return ($field_name, 1) if $value =~ $pat;
+    }}
+  }}
+  return ('', 0);
+}}
+
+sub _apply_quarantine {{
+  my ($msginfo, $matched_field) = @_;
+  Amavis::load_policy_bank('MAILPANEL_CONTENT');
+  $msginfo->add_contents_category(CC_SPAM, 999);
+  for my $r (@{{$msginfo->per_recip_data}}) {{
+    next if $r->recip_done;
+    $r->add_contents_category(CC_SPAM, 999);
+    $r->spam_level(999);
+    do_log(0, "MAILPANEL: content filter matched in %s for <%s>", $matched_field, $r->recip_addr);
+  }}
+}}
+
 sub new {{
   my ($class, $conn, $msginfo) = @_;
   return undef unless @MAILPANEL_SUBJECT_PATTERNS || @MAILPANEL_BODY_PATTERNS;
-  do_log(
-    1,
-    "MAILPANEL: hook active (%d subject, %d body patterns) for <%s>",
-    scalar @MAILPANEL_SUBJECT_PATTERNS,
-    scalar @MAILPANEL_BODY_PATTERNS,
-    $msginfo->sender || 'unknown'
-  );
-  bless {{}}, $class;
+  my ($field, $matched) = _match_patterns([_subject_candidates($msginfo)], \\@MAILPANEL_SUBJECT_PATTERNS, 'subject');
+  my $self = {{ matched => 0, matched_field => '' }};
+  if ($matched) {{
+    $self->{{matched}} = 1;
+    $self->{{matched_field}} = $field;
+    _apply_quarantine($msginfo, $field);
+  }}
+  bless $self, $class;
 }}
 
 sub _decode_header {{
@@ -232,41 +308,18 @@ sub _read_body_sample {{
 
 sub checks {{
   my ($self, $conn, $msginfo) = @_;
-  my $subject_raw = $msginfo->get_header_field_body('subject');
-  my $subject = _decode_header($subject_raw);
-  my $matched = 0;
-  my $matched_field = '';
+  return if $self->{{matched}};
 
-  for my $pat (@MAILPANEL_SUBJECT_PATTERNS) {{
-    if ($subject =~ $pat || (defined $subject_raw && $subject_raw =~ $pat)) {{
-      $matched = 1;
-      $matched_field = 'subject';
-      last;
-    }}
-  }}
-
+  my ($field, $matched) = _match_patterns([_subject_candidates($msginfo)], \\@MAILPANEL_SUBJECT_PATTERNS, 'subject');
   if (!$matched && @MAILPANEL_BODY_PATTERNS) {{
     my $body = _read_body_sample($msginfo);
-    for my $pat (@MAILPANEL_BODY_PATTERNS) {{
-      if ($body =~ $pat) {{
-        $matched = 1;
-        $matched_field = 'body';
-        last;
-      }}
-    }}
+    ($field, $matched) = _match_patterns([$body], \\@MAILPANEL_BODY_PATTERNS, 'body');
   }}
-
   return unless $matched;
 
-  Amavis::load_policy_bank('MAILPANEL_CONTENT');
-  $msginfo->add_contents_category(CC_SPAM, 999);
-
-  for my $r (@{{$msginfo->per_recip_data}}) {{
-    next if $r->recip_done;
-    $r->add_contents_category(CC_SPAM, 999);
-    $r->spam_level(999);
-    do_log(0, "MAILPANEL: content filter matched in %s for <%s>", $matched_field, $r->recip_addr);
-  }}
+  $self->{{matched}} = 1;
+  $self->{{matched_field}} = $field;
+  _apply_quarantine($msginfo, $field);
 }}
 
 1;
