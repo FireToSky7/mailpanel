@@ -187,6 +187,7 @@ def _build_amavis_custom_filters(filters: list[dict[str, Any]]) -> str:
 # Loaded last in amavisd.conf (MAILPANEL_CUSTOM_HOOK). ClamAV is absent on this host;
 # without this, Amavis fails AV and passes mail as UNCHECKED before content hooks run.
 @bypass_virus_checks_maps = (1);
+@bypass_spam_checks_maps = (0);
 @av_scanners = ();
 @av_scanners_backup = ();
 foreach my $bank (keys %policy_bank) {
@@ -249,26 +250,49 @@ sub _match_patterns {{
   return ('', 0);
 }}
 
-sub _apply_quarantine {{
-  my ($msginfo, $matched_field) = @_;
+sub _match_mail {{
+  my ($msginfo) = @_;
+  my ($field, $matched) = _match_patterns([_subject_candidates($msginfo)], \\@MAILPANEL_SUBJECT_PATTERNS, 'subject');
+  if (!$matched && @MAILPANEL_BODY_PATTERNS) {{
+    my $body = _read_body_sample($msginfo);
+    ($field, $matched) = _match_patterns([$body], \\@MAILPANEL_BODY_PATTERNS, 'body');
+  }}
+  return ($field, $matched);
+}}
+
+sub _block_recipients {{
+  my ($conn, $msginfo, $matched_field, $self) = @_;
+  return if $self && $self->{{blocked}};
   Amavis::load_policy_bank('MAILPANEL_CONTENT');
   $msginfo->add_contents_category(CC_SPAM, 999);
-  my $applied = 0;
+  my $method = c('spam_quarantine_method');
+  $method = 'sql:spam-%m' unless defined $method && length $method;
+  my $quar_to = c('spam_quarantine_to');
+  $quar_to = 'spam-quarantine@localhost' unless defined $quar_to && length $quar_to;
+  my $blocked = 0;
   for my $r (@{{$msginfo->per_recip_data}}) {{
     next if $r->recip_done;
     $r->add_contents_category(CC_SPAM, 999);
     $r->spam_level(999);
-    $applied = 1;
-    do_log(0, "MAILPANEL: content filter matched in %s for <%s>", $matched_field, $r->recip_addr);
+    eval {{
+      Amavis::do_quarantine($conn, $msginfo, $r, [$quar_to], $method);
+    }};
+    if ($@) {{
+      do_log(0, "MAILPANEL: do_quarantine failed for <%s>: %s", $r->recip_addr, $@);
+    }}
+    $r->recip_done(1);
+    $r->recip_smtp_response('250 2.7.0 MailPanel content filter quarantine');
+    $blocked = 1;
+    do_log(0, "MAILPANEL: blocked delivery (%s) for <%s>", $matched_field, $r->recip_addr);
   }}
-  do_log(0, "MAILPANEL: matched in %s but no recipients in per_recip_data", $matched_field)
-    unless $applied;
+  $self->{{blocked}} = 1 if $self && $blocked;
 }}
 
 sub new {{
   my ($class, $conn, $msginfo) = @_;
   return undef unless @MAILPANEL_SUBJECT_PATTERNS || @MAILPANEL_BODY_PATTERNS;
-  bless {{}}, $class;
+  do_log(0, "MAILPANEL: new() <%s>", $msginfo->sender || '?');
+  bless {{ blocked => 0 }}, $class;
 }}
 
 sub _decode_header {{
@@ -309,16 +333,17 @@ sub _read_body_sample {{
 
 sub checks {{
   my ($self, $conn, $msginfo) = @_;
-  do_log(0, "MAILPANEL: checks() for <%s>", $msginfo->sender || '?');
-
-  my ($field, $matched) = _match_patterns([_subject_candidates($msginfo)], \\@MAILPANEL_SUBJECT_PATTERNS, 'subject');
-  if (!$matched && @MAILPANEL_BODY_PATTERNS) {{
-    my $body = _read_body_sample($msginfo);
-    ($field, $matched) = _match_patterns([$body], \\@MAILPANEL_BODY_PATTERNS, 'body');
-  }}
+  my ($field, $matched) = _match_mail($msginfo);
   return unless $matched;
+  _block_recipients($conn, $msginfo, $field, $self);
+}}
 
-  _apply_quarantine($msginfo, $field);
+sub before_send {{
+  my ($self, $conn, $msginfo) = @_;
+  return if $self->{{blocked}};
+  my ($field, $matched) = _match_mail($msginfo);
+  return unless $matched;
+  _block_recipients($conn, $msginfo, $field, $self);
 }}
 
 1;
