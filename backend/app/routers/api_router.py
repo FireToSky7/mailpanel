@@ -578,6 +578,19 @@ def get_banned_extensions():
         raise HTTPException(400, str(exc)) from exc
 
 
+@router.post("/antispam/banned-extensions/reapply", dependencies=[Depends(require_permission("antispam.write"))])
+def reapply_banned_extensions_route(
+    request: Request,
+    user: PanelUser = Depends(require_permission("antispam.write")),
+):
+    try:
+        result = amavis_policy.reapply_banned_extensions()
+        _audit(user, request, "reapply", "banned_extensions", ", ".join(result["extensions"]))
+    except AmavisPolicyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return result
+
+
 @router.put("/antispam/banned-extensions", dependencies=[Depends(require_permission("antispam.write"))])
 def put_banned_extensions(
     payload: BannedExtensionsUpdate,

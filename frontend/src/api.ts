@@ -72,6 +72,7 @@ export type BannedExtensionsData = {
   extensions: string[]
   markers_present: boolean
   source_file: string
+  needs_resync?: boolean
 }
 
 export type MailPolicyData = {
@@ -379,6 +380,10 @@ export const api = {
     request<{ ok: boolean; extensions: string[] }>('/api/antispam/banned-extensions', {
       method: 'PUT',
       body: JSON.stringify({ extensions }),
+    }),
+  reapplyBannedExtensions: () =>
+    request<{ ok: boolean; extensions: string[] }>('/api/antispam/banned-extensions/reapply', {
+      method: 'POST',
     }),
   mailPolicy: () => request<MailPolicyData>('/api/antispam/mail-policy'),
   updateMailPolicy: (scan_internal_mail: boolean) =>

@@ -11,6 +11,7 @@ export default function AntispamPage() {
   const [blacklistEntry, setBlacklistEntry] = useState('')
   const [score, setScore] = useState('5.0')
   const [bannedExtensions, setBannedExtensions] = useState<string[]>([])
+  const [bannedNeedsResync, setBannedNeedsResync] = useState(false)
   const [bannedEntry, setBannedEntry] = useState('')
   const [mailPolicy, setMailPolicy] = useState<MailPolicyData | null>(null)
   const [scanInternal, setScanInternal] = useState(false)
@@ -46,6 +47,7 @@ export default function AntispamPage() {
     try {
       const banned = await api.bannedExtensions()
       setBannedExtensions(banned.extensions)
+      setBannedNeedsResync(Boolean(banned.needs_resync))
     } catch (e) {
       errors.push(`Запрещённые файлы: ${errorMessage(e)}`)
       setBannedExtensions([])
@@ -146,6 +148,16 @@ export default function AntispamPage() {
     }
   }
 
+  async function reapplyBannedExtensions() {
+    try {
+      await api.reapplyBannedExtensions()
+      notify.success('Список применён к Amavis — действуют только расширения из панели')
+      await load()
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
+  }
+
   async function saveMailPolicy() {
     try {
       await api.updateMailPolicy(scanInternal)
@@ -173,9 +185,14 @@ export default function AntispamPage() {
         <div className="card">
           <h3>Запрещённые типы файлов (вложения)</h3>
           <p className="muted">
-            Расширения, при которых Amavis блокирует письмо (карантин или отбраковка).
-            Изменения записываются в amavisd.conf и перезапускают Amavis.
+            Блокируются <strong>только</strong> расширения из этого списка. Встроенные правила iRedMail
+            в Amavis заменяются при сохранении.
           </p>
+          {bannedNeedsResync && (
+            <p className="muted" style={{ color: '#f0a060' }}>
+              В amavisd.conf остались старые правила (например .exe). Нажмите «Применить к Amavis».
+            </p>
+          )}
           <div className="form-row">
             <input
               placeholder="exe, bat, ps1…"
@@ -184,6 +201,7 @@ export default function AntispamPage() {
               onKeyDown={(e) => e.key === 'Enter' && addBannedExtensionAction()}
             />
             <button onClick={addBannedExtensionAction}>Добавить</button>
+            <button className="secondary" onClick={reapplyBannedExtensions}>Применить к Amavis</button>
           </div>
           <EntryList
             items={bannedExtensions}

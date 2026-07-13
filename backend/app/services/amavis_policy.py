@@ -141,6 +141,21 @@ def _build_banned_qr(extensions: list[str]) -> str:
     return f"  {MARKER_BANNED_BEGIN}\n  qr'\\.({joined})$'i,\n  {MARKER_BANNED_END}"
 
 
+def _foreign_banned_rules_present(inner: str) -> bool:
+    without_mailpanel = re.sub(
+        re.escape(MARKER_BANNED_BEGIN) + r".*?" + re.escape(MARKER_BANNED_END),
+        "",
+        inner,
+        count=1,
+        flags=re.DOTALL,
+    )
+    for line in without_mailpanel.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            return True
+    return False
+
+
 def _ensure_banned_block(content: str, extensions: list[str]) -> str:
     qr_block = _build_banned_qr(extensions)
     match = BANNED_BLOCK_RE.search(content)
@@ -149,18 +164,9 @@ def _ensure_banned_block(content: str, extensions: list[str]) -> str:
             "В amavisd.conf не найден блок $banned_filename_re = new_RE(...). "
             "Добавьте маркеры вручную или проверьте путь amavisd_config."
         )
-    inner = match.group(2)
-    if MARKER_BANNED_BEGIN in inner and MARKER_BANNED_END in inner:
-        inner = re.sub(
-            re.escape(MARKER_BANNED_BEGIN) + r".*?" + re.escape(MARKER_BANNED_END),
-            _build_banned_qr(extensions).strip(),
-            inner,
-            count=1,
-            flags=re.DOTALL,
-        )
-    else:
-        inner = inner.rstrip() + "\n" + qr_block + "\n"
-    return content[: match.start(2)] + inner + content[match.end(2) :]
+    # MailPanel полностью владеет списком: убираем встроенные правила iRedMail.
+    new_inner = f"\n{qr_block}\n"
+    return content[: match.start(2)] + new_inner + content[match.end(2) :]
 
 
 def _build_include_file(
@@ -272,6 +278,7 @@ def read_banned_extensions() -> dict[str, Any]:
     amavis_path = amavisd_config_path()
     parsed: list[str] = []
     markers_present = False
+    content = ""
     if amavis_path.exists():
         content = amavis_path.read_text(encoding="utf-8", errors="replace")
         markers_present = MARKER_BANNED_BEGIN in content and MARKER_BANNED_END in content
@@ -284,11 +291,24 @@ def read_banned_extensions() -> dict[str, Any]:
             if block_match:
                 parsed = _parse_extensions_from_qr(block_match.group(1))
     extensions = stored or parsed or list(DEFAULT_EXTENSIONS)
+    needs_resync = False
+    if amavis_path.exists() and stored:
+        block_match = BANNED_BLOCK_RE.search(content)
+        if block_match and _foreign_banned_rules_present(block_match.group(2)):
+            needs_resync = True
     return {
         "extensions": [_format_extension(ext) for ext in extensions],
         "markers_present": markers_present,
         "source_file": str(ext_path),
+        "needs_resync": needs_resync,
     }
+
+
+def reapply_banned_extensions() -> dict[str, Any]:
+    stored = [_normalize_extension(item) for item in _read_lines(banned_extensions_path())]
+    if not stored:
+        raise AmavisPolicyError("Список запрещённых расширений пуст — сначала задайте его в панели")
+    return write_banned_extensions([_format_extension(ext) for ext in stored])
 
 
 def write_banned_extensions(extensions: list[str]) -> dict[str, Any]:
