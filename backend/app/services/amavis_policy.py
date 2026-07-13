@@ -11,9 +11,8 @@ from app.config import get_config
 
 MARKER_BANNED_BEGIN = "# MAILPANEL_BANNED_BEGIN"
 MARKER_BANNED_END = "# MAILPANEL_BANNED_END"
-MARKER_NAMEPAT_BEGIN = "# MAILPANEL_NAMEPAT_BEGIN"
-MARKER_NAMEPAT_END = "# MAILPANEL_NAMEPAT_END"
 MARKER_INCLUDE = "# MAILPANEL_INCLUDE"
+NAMEPAT_ALIAS_LINE = "$banned_namepat_re = $banned_filename_re;"
 MARKER_POLICY_BEGIN = "# MAILPANEL_POLICY_BEGIN"
 MARKER_POLICY_END = "# MAILPANEL_POLICY_END"
 
@@ -23,12 +22,8 @@ BANNED_BLOCK_RE = re.compile(
     r"(\$banned_filename_re\s*=\s*new_RE\s*\()(.*?)(\)\s*;)",
     re.DOTALL,
 )
-BANNED_NAMEPAT_BLOCK_RE = re.compile(
-    r"(\$banned_namepat_re\s*=\s*new_RE\s*\()(.*?)(\)\s*;)",
-    re.DOTALL,
-)
-OTHER_BANNED_RES_RE = re.compile(
-    r"(\$banned_(?:namespath|mimetypes|archive)_re\s*=\s*new_RE\s*\()(.*?)(\)\s*;)",
+BANNED_NAMEPAT_NEW_RE = re.compile(
+    r"\$banned_namepat_re\s*=\s*new_RE\s*\(.*?\)\s*;\s*",
     re.DOTALL,
 )
 
@@ -155,10 +150,6 @@ def _build_banned_filename_qr(extensions: list[str]) -> str:
     return _build_banned_qr(extensions, MARKER_BANNED_BEGIN, MARKER_BANNED_END)
 
 
-def _build_banned_namepat_qr(extensions: list[str]) -> str:
-    return _build_banned_qr(extensions, MARKER_NAMEPAT_BEGIN, MARKER_NAMEPAT_END)
-
-
 def _foreign_banned_rules_present(inner: str, begin: str, end: str) -> bool:
     without_mailpanel = re.sub(
         re.escape(begin) + r".*?" + re.escape(end),
@@ -174,63 +165,50 @@ def _foreign_banned_rules_present(inner: str, begin: str, end: str) -> bool:
     return False
 
 
-def _replace_banned_re_block(
-    content: str,
-    pattern: re.Pattern[str],
-    qr_block: str,
-    variable: str,
-) -> str:
-    match = pattern.search(content)
-    if match:
-        new_inner = f"\n{qr_block}\n"
-        return content[: match.start(2)] + new_inner + content[match.end(2) :]
-    if variable == "$banned_namepat_re":
-        filename_match = BANNED_BLOCK_RE.search(content)
-        if filename_match:
-            insertion = f"\n\n$banned_namepat_re = new_RE(\n{qr_block}\n);\n"
-            pos = filename_match.end()
-            return content[:pos] + insertion + content[pos:]
-    raise AmavisPolicyError(
-        f"В amavisd.conf не найден блок {variable} = new_RE(...). "
-        "Проверьте paths.amavisd_config."
+def _replace_banned_re_block(content: str, qr_block: str) -> str:
+    match = BANNED_BLOCK_RE.search(content)
+    if not match:
+        raise AmavisPolicyError(
+            "В amavisd.conf не найден блок $banned_filename_re = new_RE(...). "
+            "Проверьте paths.amavisd_config."
+        )
+    new_inner = f"\n{qr_block}\n"
+    return content[: match.start(2)] + new_inner + content[match.end(2) :]
+
+
+def _ensure_namepat_alias(content: str) -> str:
+    """iRedMail: namepat должен ссылаться на filename_re, а не на отдельный huge list."""
+    content = BANNED_NAMEPAT_NEW_RE.sub("", content)
+    content = re.sub(
+        r"\$banned_namepat_re\s*=\s*\$banned_filename_re\s*;\s*",
+        "",
+        content,
     )
-
-
-def _neutralize_other_banned_res(content: str) -> str:
-    for match in reversed(list(OTHER_BANNED_RES_RE.finditer(content))):
-        new_inner = "\n  # disabled by MailPanel\n  qr'^\\x00$'i,\n"
-        content = content[: match.start(2)] + new_inner + content[match.end(2) :]
-    return content
+    filename_match = BANNED_BLOCK_RE.search(content)
+    if not filename_match:
+        return content
+    insertion = f"\n{NAMEPAT_ALIAS_LINE}\n"
+    pos = filename_match.end()
+    return content[:pos] + insertion + content[pos:]
 
 
 def _ensure_all_banned_blocks(content: str, extensions: list[str]) -> str:
-    content = _replace_banned_re_block(
-        content,
-        BANNED_BLOCK_RE,
-        _build_banned_filename_qr(extensions),
-        "$banned_filename_re",
-    )
-    content = _replace_banned_re_block(
-        content,
-        BANNED_NAMEPAT_BLOCK_RE,
-        _build_banned_namepat_qr(extensions),
-        "$banned_namepat_re",
-    )
-    return _neutralize_other_banned_res(content)
+    content = _replace_banned_re_block(content, _build_banned_filename_qr(extensions))
+    return _ensure_namepat_alias(content)
 
 
 def _banned_config_needs_resync(content: str, stored: list[str]) -> bool:
     if not stored:
         return False
-    for pattern, begin, end in (
-        (BANNED_BLOCK_RE, MARKER_BANNED_BEGIN, MARKER_BANNED_END),
-        (BANNED_NAMEPAT_BLOCK_RE, MARKER_NAMEPAT_BEGIN, MARKER_NAMEPAT_END),
-    ):
-        block_match = pattern.search(content)
-        if not block_match:
-            return True
-        if _foreign_banned_rules_present(block_match.group(2), begin, end):
-            return True
+    block_match = BANNED_BLOCK_RE.search(content)
+    if not block_match:
+        return True
+    if _foreign_banned_rules_present(block_match.group(2), MARKER_BANNED_BEGIN, MARKER_BANNED_END):
+        return True
+    if BANNED_NAMEPAT_NEW_RE.search(content):
+        return True
+    if NAMEPAT_ALIAS_LINE not in content:
+        return True
     return False
 
 
@@ -353,8 +331,7 @@ def read_banned_extensions() -> dict[str, Any]:
         markers_present = (
             MARKER_BANNED_BEGIN in content
             and MARKER_BANNED_END in content
-            and MARKER_NAMEPAT_BEGIN in content
-            and MARKER_NAMEPAT_END in content
+            and NAMEPAT_ALIAS_LINE in content
         )
         if MARKER_BANNED_BEGIN in content and MARKER_BANNED_END in content:
             block_match = re.search(
@@ -394,10 +371,18 @@ def write_banned_extensions(extensions: list[str]) -> dict[str, Any]:
         raise AmavisPolicyError(f"Файл amavisd.conf не найден: {amavis_path}")
 
     policy = _read_policy_file()
-    content = amavis_path.read_text(encoding="utf-8", errors="replace")
+    amavis_backup = amavis_path.read_text(encoding="utf-8", errors="replace")
+    content = amavis_backup
     content = _ensure_banned_block(content, normalized)
     include_path = amavis_include_path()
     content = _ensure_include_line(content, include_path)
+
+    config_error = _test_amavis_config_for_content(content)
+    if config_error:
+        raise AmavisPolicyError(
+            f"Конфигурация Amavis невалидна, изменения не записаны: {config_error[:600]}"
+        )
+
     amavis_path.write_text(content, encoding="utf-8")
 
     include_path.write_text(
@@ -454,5 +439,40 @@ def write_mail_policy(scan_internal_mail: bool) -> dict[str, Any]:
     return {"ok": True, "scan_internal_mail": scan_internal_mail}
 
 
+def _test_amavis_config_for_content(content: str) -> str | None:
+    amavis_path = amavisd_config_path()
+    backup: str | None = None
+    if amavis_path.is_file():
+        backup = amavis_path.read_text(encoding="utf-8", errors="replace")
+    try:
+        amavis_path.write_text(content, encoding="utf-8")
+        return _test_amavis_config()
+    finally:
+        if backup is not None:
+            amavis_path.write_text(backup, encoding="utf-8")
+
+
+def _test_amavis_config() -> str | None:
+    for cmd in (["amavisd", "testconfig"], ["/usr/sbin/amavisd", "testconfig"]):
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+        except FileNotFoundError:
+            continue
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "amavisd testconfig failed").strip()
+            return detail
+        return None
+    return None
+
+
 def _restart_amavisd() -> None:
+    config_error = _test_amavis_config()
+    if config_error:
+        raise AmavisPolicyError(f"Amavis не запускается: {config_error[:600]}")
     subprocess.run(["systemctl", "restart", "amavisd"], check=False)

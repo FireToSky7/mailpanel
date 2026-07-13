@@ -190,8 +190,7 @@ export default function AntispamPage() {
           </p>
           {bannedNeedsResync && (
             <p className="muted" style={{ color: '#f0a060' }}>
-              В amavisd.conf остались старые правила iRedMail (в т.ч. $banned_namepat_re с .exe).
-              Нажмите «Применить к Amavis».
+              В Amavis остались старые правила. Нажмите «Применить к Amavis».
             </p>
           )}
           <div className="form-row">
