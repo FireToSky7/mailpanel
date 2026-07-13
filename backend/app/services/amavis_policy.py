@@ -11,6 +11,8 @@ from app.config import get_config
 
 MARKER_BANNED_BEGIN = "# MAILPANEL_BANNED_BEGIN"
 MARKER_BANNED_END = "# MAILPANEL_BANNED_END"
+MARKER_NAMEPAT_BEGIN = "# MAILPANEL_NAMEPAT_BEGIN"
+MARKER_NAMEPAT_END = "# MAILPANEL_NAMEPAT_END"
 MARKER_INCLUDE = "# MAILPANEL_INCLUDE"
 MARKER_POLICY_BEGIN = "# MAILPANEL_POLICY_BEGIN"
 MARKER_POLICY_END = "# MAILPANEL_POLICY_END"
@@ -19,6 +21,14 @@ EXTENSION_RE = re.compile(r"^[a-z0-9]{1,16}$")
 QR_EXT_RE = re.compile(r"qr'[^(]*\(([^)]+)\)[^']*'\s*i?", re.IGNORECASE)
 BANNED_BLOCK_RE = re.compile(
     r"(\$banned_filename_re\s*=\s*new_RE\s*\()(.*?)(\)\s*;)",
+    re.DOTALL,
+)
+BANNED_NAMEPAT_BLOCK_RE = re.compile(
+    r"(\$banned_namepat_re\s*=\s*new_RE\s*\()(.*?)(\)\s*;)",
+    re.DOTALL,
+)
+OTHER_BANNED_RES_RE = re.compile(
+    r"(\$banned_(?:namespath|mimetypes|archive)_re\s*=\s*new_RE\s*\()(.*?)(\)\s*;)",
     re.DOTALL,
 )
 
@@ -133,17 +143,25 @@ def _write_policy_file(
     return policy
 
 
-def _build_banned_qr(extensions: list[str]) -> str:
+def _build_banned_qr(extensions: list[str], begin: str, end: str) -> str:
     normalized = sorted({_normalize_extension(ext) for ext in extensions})
     if not normalized:
         raise AmavisPolicyError("Список запрещённых расширений не может быть пустым")
     joined = "|".join(normalized)
-    return f"  {MARKER_BANNED_BEGIN}\n  qr'\\.({joined})$'i,\n  {MARKER_BANNED_END}"
+    return f"  {begin}\n  qr'\\.({joined})$'i,\n  {end}"
 
 
-def _foreign_banned_rules_present(inner: str) -> bool:
+def _build_banned_filename_qr(extensions: list[str]) -> str:
+    return _build_banned_qr(extensions, MARKER_BANNED_BEGIN, MARKER_BANNED_END)
+
+
+def _build_banned_namepat_qr(extensions: list[str]) -> str:
+    return _build_banned_qr(extensions, MARKER_NAMEPAT_BEGIN, MARKER_NAMEPAT_END)
+
+
+def _foreign_banned_rules_present(inner: str, begin: str, end: str) -> bool:
     without_mailpanel = re.sub(
-        re.escape(MARKER_BANNED_BEGIN) + r".*?" + re.escape(MARKER_BANNED_END),
+        re.escape(begin) + r".*?" + re.escape(end),
         "",
         inner,
         count=1,
@@ -156,17 +174,68 @@ def _foreign_banned_rules_present(inner: str) -> bool:
     return False
 
 
+def _replace_banned_re_block(
+    content: str,
+    pattern: re.Pattern[str],
+    qr_block: str,
+    variable: str,
+) -> str:
+    match = pattern.search(content)
+    if match:
+        new_inner = f"\n{qr_block}\n"
+        return content[: match.start(2)] + new_inner + content[match.end(2) :]
+    if variable == "$banned_namepat_re":
+        filename_match = BANNED_BLOCK_RE.search(content)
+        if filename_match:
+            insertion = f"\n\n$banned_namepat_re = new_RE(\n{qr_block}\n);\n"
+            pos = filename_match.end()
+            return content[:pos] + insertion + content[pos:]
+    raise AmavisPolicyError(
+        f"В amavisd.conf не найден блок {variable} = new_RE(...). "
+        "Проверьте paths.amavisd_config."
+    )
+
+
+def _neutralize_other_banned_res(content: str) -> str:
+    for match in reversed(list(OTHER_BANNED_RES_RE.finditer(content))):
+        new_inner = "\n  # disabled by MailPanel\n  qr'^\\x00$'i,\n"
+        content = content[: match.start(2)] + new_inner + content[match.end(2) :]
+    return content
+
+
+def _ensure_all_banned_blocks(content: str, extensions: list[str]) -> str:
+    content = _replace_banned_re_block(
+        content,
+        BANNED_BLOCK_RE,
+        _build_banned_filename_qr(extensions),
+        "$banned_filename_re",
+    )
+    content = _replace_banned_re_block(
+        content,
+        BANNED_NAMEPAT_BLOCK_RE,
+        _build_banned_namepat_qr(extensions),
+        "$banned_namepat_re",
+    )
+    return _neutralize_other_banned_res(content)
+
+
+def _banned_config_needs_resync(content: str, stored: list[str]) -> bool:
+    if not stored:
+        return False
+    for pattern, begin, end in (
+        (BANNED_BLOCK_RE, MARKER_BANNED_BEGIN, MARKER_BANNED_END),
+        (BANNED_NAMEPAT_BLOCK_RE, MARKER_NAMEPAT_BEGIN, MARKER_NAMEPAT_END),
+    ):
+        block_match = pattern.search(content)
+        if not block_match:
+            return True
+        if _foreign_banned_rules_present(block_match.group(2), begin, end):
+            return True
+    return False
+
+
 def _ensure_banned_block(content: str, extensions: list[str]) -> str:
-    qr_block = _build_banned_qr(extensions)
-    match = BANNED_BLOCK_RE.search(content)
-    if not match:
-        raise AmavisPolicyError(
-            "В amavisd.conf не найден блок $banned_filename_re = new_RE(...). "
-            "Добавьте маркеры вручную или проверьте путь amavisd_config."
-        )
-    # MailPanel полностью владеет списком: убираем встроенные правила iRedMail.
-    new_inner = f"\n{qr_block}\n"
-    return content[: match.start(2)] + new_inner + content[match.end(2) :]
+    return _ensure_all_banned_blocks(content, extensions)
 
 
 def _build_include_file(
@@ -281,8 +350,13 @@ def read_banned_extensions() -> dict[str, Any]:
     content = ""
     if amavis_path.exists():
         content = amavis_path.read_text(encoding="utf-8", errors="replace")
-        markers_present = MARKER_BANNED_BEGIN in content and MARKER_BANNED_END in content
-        if markers_present:
+        markers_present = (
+            MARKER_BANNED_BEGIN in content
+            and MARKER_BANNED_END in content
+            and MARKER_NAMEPAT_BEGIN in content
+            and MARKER_NAMEPAT_END in content
+        )
+        if MARKER_BANNED_BEGIN in content and MARKER_BANNED_END in content:
             block_match = re.search(
                 re.escape(MARKER_BANNED_BEGIN) + r"(.*?)" + re.escape(MARKER_BANNED_END),
                 content,
@@ -291,11 +365,7 @@ def read_banned_extensions() -> dict[str, Any]:
             if block_match:
                 parsed = _parse_extensions_from_qr(block_match.group(1))
     extensions = stored or parsed or list(DEFAULT_EXTENSIONS)
-    needs_resync = False
-    if amavis_path.exists() and stored:
-        block_match = BANNED_BLOCK_RE.search(content)
-        if block_match and _foreign_banned_rules_present(block_match.group(2)):
-            needs_resync = True
+    needs_resync = bool(content and _banned_config_needs_resync(content, stored))
     return {
         "extensions": [_format_extension(ext) for ext in extensions],
         "markers_present": markers_present,
