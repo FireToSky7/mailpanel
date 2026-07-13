@@ -11,8 +11,9 @@ from app.config import get_config
 
 MARKER_BANNED_BEGIN = "# MAILPANEL_BANNED_BEGIN"
 MARKER_BANNED_END = "# MAILPANEL_BANNED_END"
+MARKER_NAMEPATH_BEGIN = "# MAILPANEL_NAMEPATH_BEGIN"
+MARKER_NAMEPATH_END = "# MAILPANEL_NAMEPATH_END"
 MARKER_INCLUDE = "# MAILPANEL_INCLUDE"
-NAMEPAT_ALIAS_LINE = "$banned_namepat_re = $banned_filename_re;"
 MARKER_POLICY_BEGIN = "# MAILPANEL_POLICY_BEGIN"
 MARKER_POLICY_END = "# MAILPANEL_POLICY_END"
 
@@ -22,9 +23,13 @@ BANNED_BLOCK_RE = re.compile(
     r"(\$banned_filename_re\s*=\s*new_RE\s*\()(.*?)(\)\s*;)",
     re.DOTALL,
 )
-BANNED_NAMEPAT_NEW_RE = re.compile(
-    r"\$banned_namepat_re\s*=\s*new_RE\s*\(.*?\)\s*;\s*",
+BANNED_NAMEPATH_BLOCK_RE = re.compile(
+    r"(\$banned_namepath_re\s*=\s*new_RE\s*\()(.*?)(\)\s*;)",
     re.DOTALL,
+)
+INVALID_NAMEPAT_RE = re.compile(
+    r"^\s*\$banned_namepat_re\b.*$",
+    re.MULTILINE,
 )
 
 DEFAULT_EXTENSIONS = (
@@ -150,6 +155,18 @@ def _build_banned_filename_qr(extensions: list[str]) -> str:
     return _build_banned_qr(extensions, MARKER_BANNED_BEGIN, MARKER_BANNED_END)
 
 
+def _build_banned_namepath_qr(extensions: list[str]) -> str:
+    normalized = sorted({_normalize_extension(ext) for ext in extensions})
+    if not normalized:
+        raise AmavisPolicyError("Список запрещённых расширений не может быть пустым")
+    joined = "|".join(normalized)
+    return (
+        f"  {MARKER_NAMEPATH_BEGIN}\n"
+        f"  [qr'N=.*\\.({joined})$'xmi => 'DISCARD'],\n"
+        f"  {MARKER_NAMEPATH_END}"
+    )
+
+
 def _foreign_banned_rules_present(inner: str, begin: str, end: str) -> bool:
     without_mailpanel = re.sub(
         re.escape(begin) + r".*?" + re.escape(end),
@@ -176,25 +193,23 @@ def _replace_banned_re_block(content: str, qr_block: str) -> str:
     return content[: match.start(2)] + new_inner + content[match.end(2) :]
 
 
-def _ensure_namepat_alias(content: str) -> str:
-    """iRedMail: namepat должен ссылаться на filename_re, а не на отдельный huge list."""
-    content = BANNED_NAMEPAT_NEW_RE.sub("", content)
-    content = re.sub(
-        r"\$banned_namepat_re\s*=\s*\$banned_filename_re\s*;\s*",
-        "",
-        content,
-    )
-    filename_match = BANNED_BLOCK_RE.search(content)
-    if not filename_match:
+def _remove_invalid_namepat_lines(content: str) -> str:
+    """$banned_namepat_re не существует в Amavis — только $banned_namepath_re."""
+    return INVALID_NAMEPAT_RE.sub("", content)
+
+
+def _replace_namepath_re_block(content: str, qr_block: str) -> str:
+    match = BANNED_NAMEPATH_BLOCK_RE.search(content)
+    if not match:
         return content
-    insertion = f"\n{NAMEPAT_ALIAS_LINE}\n"
-    pos = filename_match.end()
-    return content[:pos] + insertion + content[pos:]
+    new_inner = f"\n{qr_block}\n"
+    return content[: match.start(2)] + new_inner + content[match.end(2) :]
 
 
 def _ensure_all_banned_blocks(content: str, extensions: list[str]) -> str:
+    content = _remove_invalid_namepat_lines(content)
     content = _replace_banned_re_block(content, _build_banned_filename_qr(extensions))
-    return _ensure_namepat_alias(content)
+    return _replace_namepath_re_block(content, _build_banned_namepath_qr(extensions))
 
 
 def _banned_config_needs_resync(content: str, stored: list[str]) -> bool:
@@ -205,9 +220,14 @@ def _banned_config_needs_resync(content: str, stored: list[str]) -> bool:
         return True
     if _foreign_banned_rules_present(block_match.group(2), MARKER_BANNED_BEGIN, MARKER_BANNED_END):
         return True
-    if BANNED_NAMEPAT_NEW_RE.search(content):
+    if INVALID_NAMEPAT_RE.search(content):
         return True
-    if NAMEPAT_ALIAS_LINE not in content:
+    namepath_match = BANNED_NAMEPATH_BLOCK_RE.search(content)
+    if not namepath_match:
+        return True
+    if _foreign_banned_rules_present(
+        namepath_match.group(2), MARKER_NAMEPATH_BEGIN, MARKER_NAMEPATH_END
+    ):
         return True
     return False
 
@@ -331,7 +351,8 @@ def read_banned_extensions() -> dict[str, Any]:
         markers_present = (
             MARKER_BANNED_BEGIN in content
             and MARKER_BANNED_END in content
-            and NAMEPAT_ALIAS_LINE in content
+            and MARKER_NAMEPATH_BEGIN in content
+            and MARKER_NAMEPATH_END in content
         )
         if MARKER_BANNED_BEGIN in content and MARKER_BANNED_END in content:
             block_match = re.search(
@@ -453,7 +474,15 @@ def _test_amavis_config_for_content(content: str) -> str | None:
 
 
 def _test_amavis_config() -> str | None:
-    for cmd in (["amavisd", "testconfig"], ["/usr/sbin/amavisd", "testconfig"]):
+    conf = str(amavisd_config_path())
+    for cmd in (
+        ["amavisd", "-c", conf, "test-config"],
+        ["/usr/sbin/amavisd", "-c", conf, "test-config"],
+        ["amavisd", "test-config"],
+        ["/usr/sbin/amavisd", "test-config"],
+        ["amavisd", "testconfig"],
+        ["/usr/sbin/amavisd", "testconfig"],
+    ):
         try:
             result = subprocess.run(
                 cmd,
