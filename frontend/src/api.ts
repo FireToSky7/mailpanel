@@ -381,10 +381,6 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ extensions }),
     }),
-  reapplyBannedExtensions: () =>
-    request<{ ok: boolean; extensions: string[] }>('/api/antispam/banned-extensions/reapply', {
-      method: 'POST',
-    }),
   mailPolicy: () => request<MailPolicyData>('/api/antispam/mail-policy'),
   updateMailPolicy: (scan_internal_mail: boolean) =>
     request<{ ok: boolean; scan_internal_mail: boolean }>('/api/antispam/mail-policy', {

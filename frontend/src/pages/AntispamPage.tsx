@@ -11,7 +11,6 @@ export default function AntispamPage() {
   const [blacklistEntry, setBlacklistEntry] = useState('')
   const [score, setScore] = useState('5.0')
   const [bannedExtensions, setBannedExtensions] = useState<string[]>([])
-  const [bannedNeedsResync, setBannedNeedsResync] = useState(false)
   const [bannedEntry, setBannedEntry] = useState('')
   const [mailPolicy, setMailPolicy] = useState<MailPolicyData | null>(null)
   const [scanInternal, setScanInternal] = useState(false)
@@ -46,8 +45,17 @@ export default function AntispamPage() {
 
     try {
       const banned = await api.bannedExtensions()
-      setBannedExtensions(banned.extensions)
-      setBannedNeedsResync(Boolean(banned.needs_resync))
+      let extensions = banned.extensions
+      // Если Amavis ещё со старыми правилами — сразу синхронизируем без отдельной кнопки
+      if (canWrite && banned.needs_resync && extensions.length) {
+        try {
+          const synced = await api.updateBannedExtensions(extensions)
+          extensions = synced.extensions
+        } catch (syncErr) {
+          errors.push(`Синхронизация с Amavis: ${errorMessage(syncErr)}`)
+        }
+      }
+      setBannedExtensions(extensions)
     } catch (e) {
       errors.push(`Запрещённые файлы: ${errorMessage(e)}`)
       setBannedExtensions([])
@@ -126,7 +134,7 @@ export default function AntispamPage() {
       const next = [...bannedExtensions, ext].sort()
       await api.updateBannedExtensions(next)
       setBannedEntry('')
-      notify.success('Список запрещённых расширений сохранён')
+      notify.success('Расширение добавлено и применено к Amavis')
       await load()
     } catch (e) {
       notify.error(errorMessage(e))
@@ -141,17 +149,7 @@ export default function AntispamPage() {
     try {
       const next = bannedExtensions.filter((item) => item !== ext)
       await api.updateBannedExtensions(next)
-      notify.success('Список запрещённых расширений сохранён')
-      await load()
-    } catch (e) {
-      notify.error(errorMessage(e))
-    }
-  }
-
-  async function reapplyBannedExtensions() {
-    try {
-      await api.reapplyBannedExtensions()
-      notify.success('Список применён к Amavis — действуют только расширения из панели')
+      notify.success('Расширение удалено и применено к Amavis')
       await load()
     } catch (e) {
       notify.error(errorMessage(e))
@@ -185,14 +183,9 @@ export default function AntispamPage() {
         <div className="card">
           <h3>Запрещённые типы файлов (вложения)</h3>
           <p className="muted">
-            Блокируются <strong>только</strong> расширения из этого списка. Встроенные правила iRedMail
-            в Amavis заменяются при сохранении.
+            Блокируются <strong>только</strong> расширения из этого списка.
+            Кнопки «Добавить» и удаление сразу переписывают правила Amavis и перезапускают службу.
           </p>
-          {bannedNeedsResync && (
-            <p className="muted" style={{ color: '#f0a060' }}>
-              В Amavis остались старые правила. Нажмите «Применить к Amavis».
-            </p>
-          )}
           <div className="form-row">
             <input
               placeholder="exe, bat, ps1…"
@@ -201,7 +194,6 @@ export default function AntispamPage() {
               onKeyDown={(e) => e.key === 'Enter' && addBannedExtensionAction()}
             />
             <button onClick={addBannedExtensionAction}>Добавить</button>
-            <button className="secondary" onClick={reapplyBannedExtensions}>Применить к Amavis</button>
           </div>
           <EntryList
             items={bannedExtensions}
