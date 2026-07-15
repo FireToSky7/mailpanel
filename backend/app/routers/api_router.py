@@ -76,7 +76,8 @@ class AliasCreate(BaseModel):
 class GroupCreate(BaseModel):
     address: str
     members: list[str] = Field(min_length=1)
-    members_only: bool = False
+    domain_only: bool = True
+    members_only: bool | None = None  # устаревший алиас domain_only
 
     @field_validator("address")
     @classmethod
@@ -112,8 +113,16 @@ class GroupMemberRequest(BaseModel):
         return normalize_email(value, "Участник")
 
 
-class GroupMembersOnlyUpdate(BaseModel):
-    members_only: bool
+class GroupDomainOnlyUpdate(BaseModel):
+    domain_only: bool | None = None
+    members_only: bool | None = None  # устаревший алиас
+
+    def resolved(self) -> bool:
+        if self.domain_only is not None:
+            return self.domain_only
+        if self.members_only is not None:
+            return self.members_only
+        raise ValueError("Укажите domain_only")
 
 
 class ForwardingUpdate(BaseModel):
@@ -383,14 +392,15 @@ def post_group(payload: GroupCreate, request: Request, user: PanelUser = Depends
         if not member.endswith(f"@{domain}"):
             raise HTTPException(400, f"Участник должен быть в домене @{domain}: {member}")
     try:
+        domain_only = payload.domain_only if payload.members_only is None else payload.members_only
         group_ops.create_group(
             payload.address,
             payload.members,
-            members_only=payload.members_only,
+            domain_only=domain_only,
         )
         detail = f"{payload.address} -> {', '.join(payload.members)}"
-        if payload.members_only:
-            detail += " [members_only]"
+        if domain_only:
+            detail += " [domain_only]"
         _audit(user, request, "create", "group", detail)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -399,21 +409,23 @@ def post_group(payload: GroupCreate, request: Request, user: PanelUser = Depends
     return {"ok": True}
 
 
+@router.put("/groups/{address:path}/domain-only", dependencies=[Depends(require_permission("mail.write"))])
 @router.put("/groups/{address:path}/members-only", dependencies=[Depends(require_permission("mail.write"))])
-def put_group_members_only(
+def put_group_domain_only(
     address: str,
-    payload: GroupMembersOnlyUpdate,
+    payload: GroupDomainOnlyUpdate,
     request: Request,
     user: PanelUser = Depends(require_permission("mail.write")),
 ):
     try:
-        result = group_ops.update_group_members_only(address, payload.members_only)
+        domain_only = payload.resolved()
+        result = group_ops.update_group_domain_only(address, domain_only)
         _audit(
             user,
             request,
-            "group_members_only",
+            "group_domain_only",
             "group",
-            f"{result['address']}={'on' if result['members_only'] else 'off'}",
+            f"{result['address']}={'on' if result['domain_only'] else 'off'}",
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

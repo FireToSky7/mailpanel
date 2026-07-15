@@ -123,8 +123,9 @@ def _write_group_members(conn, address: str, members: list[str]) -> None:
         )
 
 
-def _set_access_policy(conn, address: str, members_only: bool) -> None:
-    policy = "membersonly" if members_only else ""
+def _set_access_policy(conn, address: str, domain_only: bool) -> None:
+    # iRedAPD sql_alias_access_policy: domain = только ящики того же домена
+    policy = "domain" if domain_only else ""
     execute(
         conn,
         "UPDATE alias SET accesspolicy = %s WHERE LOWER(address) = LOWER(%s)",
@@ -191,6 +192,8 @@ def list_groups(domain: str | None = None) -> list[dict[str, Any]]:
         address = str(row["address"]).lower()
         include_everyone = meta.get(address, False)
         accesspolicy = str(row.get("accesspolicy") or "").strip().lower()
+        # domain / membersonly (старое значение панели) — ограничение включено
+        domain_only = accesspolicy in ("domain", "membersonly")
         members_display = row.get("members") or ""
         if include_everyone:
             members_display = EVERYONE_TOKEN
@@ -204,7 +207,8 @@ def list_groups(domain: str | None = None) -> list[dict[str, Any]]:
                 "active": row["active"],
                 "members": members_display,
                 "include_everyone": include_everyone,
-                "members_only": accesspolicy == "membersonly",
+                "domain_only": domain_only,
+                "members_only": domain_only,  # совместимость со старым фронтом
                 "accesspolicy": accesspolicy,
             }
         )
@@ -215,12 +219,15 @@ def create_group(
     address: str,
     members: list[str],
     *,
-    members_only: bool = False,
+    domain_only: bool = False,
+    members_only: bool | None = None,
 ) -> None:
     address = address.lower().strip()
     domain = _dest_domain(address)
     _ensure_groups_table()
     emails, include_everyone = _parse_member_tokens(members, domain)
+    if members_only is not None:
+        domain_only = members_only
 
     with vmail_conn() as conn:
         if fetch_one(conn, "SELECT address FROM alias WHERE LOWER(address) = LOWER(%s)", (address,)):
@@ -231,7 +238,7 @@ def create_group(
         execute(
             conn,
             "INSERT INTO alias (address, domain, active, accesspolicy) VALUES (%s, %s, 1, %s)",
-            (address, domain, "membersonly" if members_only else ""),
+            (address, domain, "domain" if domain_only else ""),
         )
         _write_group_members(conn, address, clean_members)
 
@@ -256,13 +263,29 @@ def delete_group(address: str) -> None:
         execute(conn, "DELETE FROM mail_groups WHERE LOWER(address) = LOWER(%s)", (address,))
 
 
-def update_group_members_only(address: str, members_only: bool) -> dict[str, Any]:
+def update_group_domain_only(address: str, domain_only: bool) -> dict[str, Any]:
     address = address.lower().strip()
     if not is_group_address(address):
         raise ValueError(f"Группа не найдена: {address}")
     with vmail_conn() as conn:
-        _set_access_policy(conn, address, members_only)
-    return {"address": address, "members_only": members_only}
+        _set_access_policy(conn, address, domain_only)
+        row = fetch_one(
+            conn,
+            "SELECT accesspolicy FROM alias WHERE LOWER(address) = LOWER(%s)",
+            (address,),
+        )
+    policy = str((row or {}).get("accesspolicy") or "").strip().lower()
+    if domain_only and policy != "domain":
+        raise ValueError(
+            "Не удалось записать accesspolicy=domain в alias. "
+            "Проверьте таблицу vmail.alias и права БД."
+        )
+    return {"address": address, "domain_only": domain_only, "members_only": domain_only}
+
+
+def update_group_members_only(address: str, members_only: bool) -> dict[str, Any]:
+    """Совместимость со старым API."""
+    return update_group_domain_only(address, members_only)
 
 
 def add_group_member(address: str, member: str) -> list[str]:

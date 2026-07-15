@@ -10,12 +10,16 @@ function isEveryoneToken(value: string): boolean {
   return token === EVERYONE || token.startsWith('everyone@')
 }
 
+function isDomainOnly(group: MailGroup): boolean {
+  return Boolean(group.domain_only ?? group.members_only)
+}
+
 export default function GroupsPage() {
   const [items, setItems] = useState<MailGroup[]>([])
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([])
   const [address, setAddress] = useState('')
   const [membersInput, setMembersInput] = useState('')
-  const [membersOnly, setMembersOnly] = useState(true)
+  const [domainOnly, setDomainOnly] = useState(true)
   const [selectedGroup, setSelectedGroup] = useState('')
   const [newMember, setNewMember] = useState('')
   const role = getUser()?.role
@@ -64,11 +68,11 @@ export default function GroupsPage() {
       await api.createGroup({
         address: address.trim(),
         members,
-        members_only: membersOnly,
+        domain_only: domainOnly,
       })
       setAddress('')
       setMembersInput('')
-      setMembersOnly(true)
+      setDomainOnly(true)
       notify.success('Группа создана')
       await load()
     } catch (e) {
@@ -88,11 +92,15 @@ export default function GroupsPage() {
     }
   }
 
-  async function toggleMembersOnly(group: MailGroup) {
-    const next = !group.members_only
+  async function toggleDomainOnly(group: MailGroup) {
+    const next = !isDomainOnly(group)
     try {
-      await api.updateGroupMembersOnly(group.address, next)
-      notify.success(next ? 'Только участники могут писать на группу' : 'Писать на группу могут все')
+      await api.updateGroupDomainOnly(group.address, next)
+      notify.success(
+        next
+          ? 'Писать на группу могут только ящики вашего домена'
+          : 'Писать на группу могут все (без ограничения)',
+      )
       await load()
     } catch (e) {
       notify.error(errorMessage(e))
@@ -167,14 +175,14 @@ export default function GroupsPage() {
             <label className="form-row" style={{ alignItems: 'center', gap: 10 }}>
               <input
                 type="checkbox"
-                checked={membersOnly}
-                onChange={(e) => setMembersOnly(e.target.checked)}
+                checked={domainOnly}
+                onChange={(e) => setDomainOnly(e.target.checked)}
               />
-              Только участники группы могут отправлять на этот адрес
+              Только ящики своего домена могут отправлять на этот групповой адрес
             </label>
             <p className="muted" style={{ marginTop: 0 }}>
-              Защита от спама: посторонний, узнав адрес группы, не сможет разослать письмо всем.
-              Требует плагин iRedAPD <code>sql_alias_access_policy</code> (обычно включён в iRedMail).
+              Защита от внешнего спама: писать на группу смогут только адреса{' '}
+              <code>@ваш-домен</code>. Нужен плагин iRedAPD <code>sql_alias_access_policy</code>.
             </p>
           </>
         )}
@@ -183,7 +191,7 @@ export default function GroupsPage() {
             <tr>
               <th>Адрес группы</th>
               <th>Участники</th>
-              <th>Только участники</th>
+              <th>Только свой домен</th>
               {canWrite && <th></th>}
             </tr>
           </thead>
@@ -196,15 +204,15 @@ export default function GroupsPage() {
                 <td>{group.address}</td>
                 <td>{group.members || '—'}</td>
                 <td>
-                  <span className={group.members_only ? 'status-yes' : 'status-no'}>
-                    {group.members_only ? 'Да' : 'Нет'}
+                  <span className={isDomainOnly(group) ? 'status-yes' : 'status-no'}>
+                    {isDomainOnly(group) ? 'Да' : 'Нет'}
                   </span>
                 </td>
                 {canWrite && (
                   <td className="actions">
                     <button className="secondary" onClick={() => setSelectedGroup(group.address)}>Управлять</button>
-                    <button className="secondary" onClick={() => toggleMembersOnly(group)}>
-                      {group.members_only ? 'Разрешить всем' : 'Только участники'}
+                    <button className="secondary" onClick={() => toggleDomainOnly(group)}>
+                      {isDomainOnly(group) ? 'Разрешить всем' : 'Только свой домен'}
                     </button>
                     <button className="danger" onClick={() => removeGroup(group.address)}>Удалить</button>
                   </td>
