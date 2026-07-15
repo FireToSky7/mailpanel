@@ -275,7 +275,7 @@ export default function AntispamPage() {
             placeholder="Комментарий (причина)"
             value={whitelistComment}
             onChange={(e) => setWhitelistComment(e.target.value)}
-            maxLength={200}
+            maxLength={400}
           />
           {canWrite && (
             <button
@@ -313,7 +313,7 @@ export default function AntispamPage() {
               placeholder="Комментарий (причина)"
               value={blacklistComment}
               onChange={(e) => setBlacklistComment(e.target.value)}
-              maxLength={200}
+              maxLength={400}
             />
             <button
               onClick={() =>

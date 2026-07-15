@@ -20,7 +20,7 @@ MAILADDR_PRIORITIES = {
     "catchall": 0,
 }
 
-COMMENT_MAX_LEN = 200
+COMMENT_MAX_LEN = 400
 
 
 def classify_address(addr: str) -> str:
