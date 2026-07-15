@@ -23,7 +23,17 @@ MARKER_CUSTOM_HOOK_END = "# MAILPANEL_CUSTOM_HOOK_END"
 FILTER_SCORE = 100.0
 VALID_FIELDS = {"subject", "body", "from"}
 FIELD_LABELS = {"subject": "Тема", "body": "Текст", "from": "Отправитель"}
+VALID_ACTIONS = {"quarantine", "delete", "forward"}
+ACTION_LABELS = {
+    "quarantine": "Карантин",
+    "delete": "Удалить",
+    "forward": "Переслать",
+}
 RULE_ID_RE = re.compile(r"^[a-z0-9]{6,16}$")
+FORWARD_EMAIL_RE = re.compile(
+    r"^[a-z0-9][a-z0-9._%+-]*@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$",
+    re.IGNORECASE,
+)
 _CYRILLIC_FOLD_FROM = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"
 _CYRILLIC_FOLD_TO = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
 
@@ -103,11 +113,51 @@ def _validate_field(field: str) -> str:
     return value
 
 
+def _validate_action(action: str) -> str:
+    value = (action or "quarantine").strip().lower()
+    if value not in VALID_ACTIONS:
+        raise ValueError("Действие должно быть quarantine, delete или forward")
+    return value
+
+
+def _validate_forward_to(forward_to: str | None, action: str) -> str:
+    if action != "forward":
+        return ""
+    value = (forward_to or "").strip().lower()
+    if not value:
+        raise ValueError("Укажите адрес для пересылки")
+    if len(value) > 200:
+        raise ValueError("Адрес пересылки не длиннее 200 символов")
+    if not FORWARD_EMAIL_RE.fullmatch(value):
+        raise ValueError("Некорректный адрес для пересылки")
+    return value
+
+
 def _validate_rule_id(rule_id: str) -> str:
     rule_id = rule_id.strip().lower()
     if not RULE_ID_RE.fullmatch(rule_id):
         raise ValueError("Некорректный идентификатор правила")
     return rule_id
+
+
+def _action_label(action: str, forward_to: str = "") -> str:
+    label = ACTION_LABELS.get(action, action)
+    if action == "forward" and forward_to:
+        return f"{label} → {forward_to}"
+    return label
+
+
+def _storage_filter(rule: dict[str, Any]) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "id": rule["id"],
+        "field": rule["field"],
+        "pattern": rule["pattern"],
+        "action": rule["action"],
+        "enabled": rule["enabled"],
+    }
+    if rule["action"] == "forward" and rule.get("forward_to"):
+        item["forward_to"] = rule["forward_to"]
+    return item
 
 
 def _read_filters_file() -> list[dict[str, Any]]:
@@ -134,14 +184,17 @@ def _normalize_filter(raw: dict[str, Any]) -> dict[str, Any]:
     rule_id = _validate_rule_id(str(raw.get("id", "")))
     field = _validate_field(str(raw.get("field", "")))
     pattern = _validate_pattern(str(raw.get("pattern", "")))
+    action = _validate_action(str(raw.get("action", "quarantine")))
+    forward_to = _validate_forward_to(raw.get("forward_to"), action)
     enabled = bool(raw.get("enabled", True))
     return {
         "id": rule_id,
         "field": field,
         "field_label": FIELD_LABELS[field],
         "pattern": pattern,
-        "action": "quarantine",
-        "action_label": "Карантин",
+        "action": action,
+        "action_label": _action_label(action, forward_to),
+        "forward_to": forward_to,
         "enabled": enabled,
     }
 
@@ -210,12 +263,14 @@ def _case_permutations(text: str, limit: int = 64) -> list[str]:
 
 
 def _sieve_required_extensions(filters: list[dict[str, Any]]) -> list[str]:
-    extensions = ["fileinto"]
+    extensions: list[str] = []
     for rule in _enabled_rules(filters):
-        if _normalize_filter(rule)["field"] == "body":
+        normalized = _normalize_filter(rule)
+        if normalized["action"] == "quarantine" and "fileinto" not in extensions:
+            extensions.append("fileinto")
+        if normalized["field"] == "body" and "body" not in extensions:
             extensions.append("body")
-            break
-    return extensions
+    return extensions or ["fileinto"]
 
 
 def _merge_sieve_requires(content: str, extensions: list[str]) -> str:
@@ -229,27 +284,35 @@ def _merge_sieve_requires(content: str, extensions: list[str]) -> str:
 
 
 def _build_sieve_block(filters: list[dict[str, Any]]) -> str:
-    conditions: list[str] = []
+    blocks: list[str] = []
     for rule in _enabled_rules(filters):
         normalized = _normalize_filter(rule)
+        # Пересылка только через Amavis: глобальный Sieve на стороне получателя
+        # иначе снова redirect+discard и письмо пропадает.
+        if normalized["action"] == "forward":
+            continue
+        conditions: list[str] = []
         for pattern in _case_permutations(normalized["pattern"]):
             escaped = _sieve_escape(pattern)
             if normalized["field"] == "subject":
-                conditions.append(f'  header :contains "Subject" "{escaped}"')
+                conditions.append(f'header :contains "Subject" "{escaped}"')
             elif normalized["field"] == "from":
-                conditions.append(f'  header :contains "From" "{escaped}"')
+                conditions.append(f'header :contains "From" "{escaped}"')
             else:
-                conditions.append(f'  body :contains "{escaped}"')
-    if not conditions:
+                conditions.append(f'body :contains "{escaped}"')
+        if not conditions:
+            continue
+        cond = ",\n  ".join(conditions)
+        if normalized["action"] == "delete":
+            action_lines = "  discard;\n  stop;"
+        else:
+            action_lines = '  fileinto "Junk";\n  stop;'
+        blocks.append(f"if anyof (\n  {cond}\n) {{\n{action_lines}\n}}")
+    if not blocks:
         return ""
-    cond = ",\n".join(conditions)
+    joined = "\n\n".join(blocks)
     return f"""{MARKER_SIEVE_BEGIN}
-if anyof (
-{cond}
-) {{
-  fileinto "Junk";
-  stop;
-}}
+{joined}
 {MARKER_SIEVE_END}
 """
 
@@ -356,7 +419,10 @@ def _check_amavis_mailpanel_journal(active: bool) -> None:
 
 
 def _build_amavis_late_policy(filters: list[dict[str, Any]]) -> str:
-    if not _enabled_rules(filters):
+    has_quarantine = any(
+        _normalize_filter(rule)["action"] == "quarantine" for rule in _enabled_rules(filters)
+    )
+    if not has_quarantine:
         return ""
     return """# Generated by MailPanel. Loaded last in amavisd.conf.
 # MYUSERS / RelayedInternal: force spam scanning (otherwise Hits: - and rules never run).
@@ -375,337 +441,62 @@ def _perl_q_string(pattern: str) -> str:
     return f"'{safe}'"
 
 
+def _rule_match_parts(normalized: dict[str, Any]) -> tuple[list[str], list[str]]:
+    literals: list[str] = []
+    patterns: list[str] = []
+    literals_seen: set[str] = set()
+    patterns_seen: set[str] = set()
+    variants = _case_permutations(normalized["pattern"])
+    if normalized["field"] in ("subject", "from"):
+        for variant in variants:
+            if variant not in literals_seen:
+                literals_seen.add(variant)
+                literals.append(variant)
+            for perl_pattern in _perl_qr_variants(variant):
+                if perl_pattern not in patterns_seen:
+                    patterns_seen.add(perl_pattern)
+                    patterns.append(perl_pattern)
+    else:
+        for variant in variants:
+            perl_pattern = _perl_qr(variant)
+            if perl_pattern not in patterns_seen:
+                patterns_seen.add(perl_pattern)
+                patterns.append(perl_pattern)
+    return literals, patterns
+
+
+def _perl_rule_entry(normalized: dict[str, Any]) -> str:
+    literals, patterns = _rule_match_parts(normalized)
+    lit_inner = ",\n      ".join(_perl_q_string(item) for item in literals)
+    pat_inner = ",\n      ".join(patterns)
+    return "\n".join(
+        [
+            "  {",
+            f"    id => {_perl_q_string(normalized['id'])},",
+            f"    field => {_perl_q_string(normalized['field'])},",
+            f"    action => {_perl_q_string(normalized['action'])},",
+            f"    forward_to => {_perl_q_string(normalized.get('forward_to') or '')},",
+            f"    literals => [{lit_inner}],",
+            f"    patterns => [{pat_inner}],",
+            "  },",
+        ]
+    )
+
+
 def _build_amavis_custom_package(filters: list[dict[str, Any]]) -> str:
-    subject_patterns: list[str] = []
-    subject_literals: list[str] = []
-    from_patterns: list[str] = []
-    from_literals: list[str] = []
-    body_patterns: list[str] = []
-    subject_literals_seen: set[str] = set()
-    subject_patterns_seen: set[str] = set()
-    from_literals_seen: set[str] = set()
-    from_patterns_seen: set[str] = set()
-    body_patterns_seen: set[str] = set()
-    for rule in _enabled_rules(filters):
-        normalized = _normalize_filter(rule)
-        variants = _case_permutations(normalized["pattern"])
-        if normalized["field"] == "subject":
-            for variant in variants:
-                if variant not in subject_literals_seen:
-                    subject_literals_seen.add(variant)
-                    subject_literals.append(variant)
-                for perl_pattern in _perl_qr_variants(variant):
-                    if perl_pattern not in subject_patterns_seen:
-                        subject_patterns_seen.add(perl_pattern)
-                        subject_patterns.append(perl_pattern)
-        elif normalized["field"] == "from":
-            for variant in variants:
-                if variant not in from_literals_seen:
-                    from_literals_seen.add(variant)
-                    from_literals.append(variant)
-                for perl_pattern in _perl_qr_variants(variant):
-                    if perl_pattern not in from_patterns_seen:
-                        from_patterns_seen.add(perl_pattern)
-                        from_patterns.append(perl_pattern)
-        else:
-            for variant in variants:
-                perl_pattern = _perl_qr(variant)
-                if perl_pattern not in body_patterns_seen:
-                    body_patterns_seen.add(perl_pattern)
-                    body_patterns.append(perl_pattern)
+    from app.services.content_filter_amavis import build_package
 
-    subject_block = "\n".join(f"  {item}," for item in subject_patterns) or ""
-    subject_literals_block = "\n".join(f"  {_perl_q_string(item)}," for item in subject_literals) or ""
-    from_block = "\n".join(f"  {item}," for item in from_patterns) or ""
-    from_literals_block = "\n".join(f"  {_perl_q_string(item)}," for item in from_literals) or ""
-    body_block = "\n".join(f"  {item}," for item in body_patterns) or ""
-
-    return f"""# Generated by MailPanel. Do not edit manually.
-# Replaces placeholder routines in Amavis::Custom and registers a spam scanner.
-use utf8;
-use strict;
-use warnings;
-no warnings qw(redefine uninitialized);
-
-package MailPanel::Filters;
-
-our @SUBJECT_PATTERNS = (
-{subject_block}
-);
-
-our @SUBJECT_LITERALS = (
-{subject_literals_block}
-);
-
-our @FROM_PATTERNS = (
-{from_block}
-);
-
-our @FROM_LITERALS = (
-{from_literals_block}
-);
-
-our @BODY_PATTERNS = (
-{body_block}
-);
-
-sub _fold_text {{
-  my ($text) = @_;
-  return '' unless defined $text;
-  $text = lc($text);
-  $text =~ tr/{_CYRILLIC_FOLD_FROM}/{_CYRILLIC_FOLD_TO}/;
-  return $text;
-}}
-
-sub _decode_header {{
-  my ($value) = @_;
-  return '' unless defined $value;
-  local $1;
-  $value =~ s/\\n([ \\t])/$1/sg;
-  $value =~ s/^[ \\t]+//s;
-  $value =~ s/[ \\t]+\\z//s;
-  my $raw = $value;
-  eval {{
-    require MIME::Words;
-    my $decoded = MIME::Words::decode_mime_words($raw);
-    $value = $decoded if defined $decoded && length $decoded;
-  }};
-  return $value;
-}}
-
-sub _subject_from_mail_file {{
-  my ($msginfo) = @_;
-  my @values;
-  my $fn = $msginfo->mail_text_fn;
-  return @values unless $fn && -f $fn;
-  open my $fh, '<', $fn or return @values;
-  binmode($fh, ':raw');
-  while (my $line = <$fh>) {{
-    last if $line =~ /^\\r?$/;
-    if ($line =~ /^Subject:\\s*(.*)/i) {{
-      my $val = $1;
-      $val =~ s/\\r?\\n$//;
-      push @values, $val if defined $val && length $val;
-      my $decoded = _decode_header($val);
-      push @values, $decoded if length $decoded;
-    }}
-  }}
-  close $fh;
-  return @values;
-}}
-
-sub _from_from_mail_file {{
-  my ($msginfo) = @_;
-  my @values;
-  my $fn = $msginfo->mail_text_fn;
-  return @values unless $fn && -f $fn;
-  open my $fh, '<', $fn or return @values;
-  binmode($fh, ':raw');
-  while (my $line = <$fh>) {{
-    last if $line =~ /^\\r?$/;
-    if ($line =~ /^(?:From|Sender|Reply-To):\\s*(.*)/i) {{
-      my $val = $1;
-      $val =~ s/\\r?\\n$//;
-      push @values, $val if defined $val && length $val;
-      my $decoded = _decode_header($val);
-      push @values, $decoded if length $decoded;
-    }}
-  }}
-  close $fh;
-  return @values;
-}}
-
-sub _match_literals {{
-  my ($values, $literals) = @_;
-  return 0 unless $values && $literals && @$literals;
-  for my $literal (@$literals) {{
-    next unless defined $literal && length $literal;
-    for my $value (@$values) {{
-      next unless defined $value && length $value;
-      my $decoded = _decode_header($value);
-      for my $candidate ($value, $decoded) {{
-        next unless defined $candidate && length $candidate;
-        return 1 if index($candidate, $literal) >= 0;
-        return 1 if index(_fold_text($candidate), _fold_text($literal)) >= 0;
-      }}
-    }}
-  }}
-  return 0;
-}}
-
-sub _subject_candidates {{
-  my ($msginfo) = @_;
-  my @values;
-  my $raw = $msginfo->get_header_field_body('subject');
-  push @values, $raw if defined $raw && length $raw;
-  for my $line ($msginfo->get_header_field('Subject')) {{
-    next unless defined $line && length $line;
-    push @values, $line;
-    my $decoded = _decode_header($line);
-    push @values, $decoded if length $decoded;
-  }}
-  if (defined $raw) {{
-    my $decoded = _decode_header($raw);
-    push @values, $decoded if length $decoded;
-  }}
-  push @values, _subject_from_mail_file($msginfo);
-  my %seen;
-  return grep {{ defined $_ && length $_ && !$seen{{_fold_text($_)}}++ }} @values;
-}}
-
-sub _from_candidates {{
-  my ($msginfo) = @_;
-  my @values;
-  my $raw = $msginfo->get_header_field_body('from');
-  push @values, $raw if defined $raw && length $raw;
-  for my $hdr (qw(From Sender Reply-To)) {{
-    for my $line ($msginfo->get_header_field($hdr)) {{
-      next unless defined $line && length $line;
-      push @values, $line;
-      my $decoded = _decode_header($line);
-      push @values, $decoded if length $decoded;
-    }}
-  }}
-  if (defined $raw) {{
-    my $decoded = _decode_header($raw);
-    push @values, $decoded if length $decoded;
-  }}
-  my $envelope = $msginfo->sender;
-  push @values, $envelope if defined $envelope && length $envelope;
-  push @values, _from_from_mail_file($msginfo);
-  my %seen;
-  return grep {{ defined $_ && length $_ && !$seen{{_fold_text($_)}}++ }} @values;
-}}
-
-sub _match_patterns {{
-  my ($values, $patterns, $field_name) = @_;
-  $field_name = 'subject' unless defined $field_name && length $field_name;
-  return ('', 0) unless $values && @$patterns;
-  for my $value (@$values) {{
-    my @candidates = ($value);
-    if ($field_name eq 'subject' || $field_name eq 'from') {{
-      my $decoded = _decode_header($value);
-      push @candidates, $decoded if length $decoded;
-    }}
-    for my $candidate (@candidates) {{
-      for my $pat (@$patterns) {{
-        return ($field_name, 1) if $candidate =~ $pat;
-      }}
-    }}
-  }}
-  return ('', 0);
-}}
-
-sub _read_body_sample {{
-  my ($msginfo) = @_;
-  my $fn = $msginfo->mail_text_fn;
-  return '' unless $fn && -f $fn;
-  open my $fh, '<', $fn or return '';
-  binmode($fh, ':raw');
-  my $in_headers = 1;
-  my $body = '';
-  while (my $line = <$fh>) {{
-    if ($in_headers) {{
-      $in_headers = 0 if $line =~ /^\\r?$/;
-      next;
-    }}
-    $body .= $line;
-    last if length($body) > 131072;
-  }}
-  close $fh;
-  return $body;
-}}
-
-sub match_mail {{
-  my ($msginfo) = @_;
-  my @subjects = _subject_candidates($msginfo);
-  if (@SUBJECT_LITERALS && _match_literals(\\@subjects, \\@SUBJECT_LITERALS)) {{
-    return ('subject', 1);
-  }}
-  my ($field, $matched) = _match_patterns(\\@subjects, \\@SUBJECT_PATTERNS, 'subject');
-  if (!$matched) {{
-    my @froms = _from_candidates($msginfo);
-    if (@FROM_LITERALS && _match_literals(\\@froms, \\@FROM_LITERALS)) {{
-      return ('from', 1);
-    }}
-    ($field, $matched) = _match_patterns(\\@froms, \\@FROM_PATTERNS, 'from');
-  }}
-  if (!$matched && @BODY_PATTERNS) {{
-    my $body = _read_body_sample($msginfo);
-    ($field, $matched) = _match_patterns([$body], \\@BODY_PATTERNS, 'body');
-  }}
-  return ($field, $matched);
-}}
-
-package main;
-
-sub Amavis::Custom::new {{
-  my ($class, $conn, $msginfo) = @_;
-  Amavis::Util::do_log(0, "MAILPANEL: custom new() <%s>", $msginfo->sender || '?');
-  bless {{ quarantined => 0, mailpanel_match => '' }}, $class;
-}}
-
-sub Amavis::Custom::checks {{
-  my ($self, $conn, $msginfo) = @_;
-  my ($field, $matched) = MailPanel::Filters::match_mail($msginfo);
-  return unless $matched;
-  $self->{{mailpanel_match}} = $field;
-  Amavis::load_policy_bank('MAILPANEL_CONTENT');
-  for my $r (@{{$msginfo->per_recip_data}}) {{
-    $r->bypass_spam_checks(0);
-    my $rl = $r->spam_level;
-    $rl = 0 if !defined $rl || $rl eq '';
-    $r->spam_level($rl + 100);
-  }}
-  Amavis::Util::do_log(0, "MAILPANEL: checks matched (%s) <%s>", $field, $msginfo->sender || '?');
-}}
-
-sub Amavis::Custom::before_send {{
-  my ($self, $conn, $msginfo) = @_;
-  return if $self->{{quarantined}};
-  my $field = $self->{{mailpanel_match}};
-  unless ($field) {{
-    my ($f, $matched) = MailPanel::Filters::match_mail($msginfo);
-    return unless $matched;
-    $field = $f;
-  }}
-  my $method = $main::spam_quarantine_method;
-  $method = 'sql:spam-%m' unless defined $method && length $method;
-  my $quar_to = $main::spam_quarantine_to;
-  $quar_to = 'spam-quarantine@localhost' unless defined $quar_to && length $quar_to;
-  eval {{ my $he = $msginfo->header_edits; }};
-  my $quar_ok = 0;
-  eval {{
-    Amavis::do_quarantine($conn, $msginfo, undef, [$quar_to], $method);
-    $quar_ok = 1;
-  }};
-  if ($quar_ok) {{
-    for my $r (@{{$msginfo->per_recip_data}}) {{
-      $r->recip_destiny(0);
-      $r->recip_smtp_response('250 2.7.0 MailPanel content filter quarantine');
-      $r->recip_done(1);
-    }}
-    $self->{{quarantined}} = 1;
-    Amavis::Util::do_log(0, "MAILPANEL: before_send quarantine (%s)", $field);
-  }} else {{
-    Amavis::Util::do_log(0, "MAILPANEL: before_send quarantine failed (%s): %s", $field, $@);
-  }}
-}}
-
-1;
-
-warn sprintf("MAILPANEL: loaded %d subject, %d from and %d body patterns\\n",
-  scalar(@MailPanel::Filters::SUBJECT_PATTERNS),
-  scalar(@MailPanel::Filters::FROM_PATTERNS),
-  scalar(@MailPanel::Filters::BODY_PATTERNS));
-"""
+    rules_block = "\n".join(
+        _perl_rule_entry(_normalize_filter(rule)) for rule in _enabled_rules(filters)
+    )
+    return build_package(rules_block, _CYRILLIC_FOLD_FROM, _CYRILLIC_FOLD_TO)
 
 
 def _build_amavis_hook_block(
     filters: list[dict[str, Any]], custom_path: Path, late_path: Path
 ) -> str:
     lines = ["# Generated by MailPanel. Do not edit manually.", f"do '{custom_path.as_posix()}';"]
-    if _enabled_rules(filters):
+    if _build_amavis_late_policy(filters):
         lines.append(f"do '{late_path.as_posix()}';")
     return "\n".join(lines)
 
@@ -742,11 +533,14 @@ def _enabled_rules(filters: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for item in filters:
         if not item.get("enabled"):
             continue
+        normalized = _normalize_filter(item)
         enabled.append(
             {
-                "id": str(item.get("id", "")),
-                "field": str(item.get("field", "")),
-                "pattern": str(item.get("pattern", "")),
+                "id": normalized["id"],
+                "field": normalized["field"],
+                "pattern": normalized["pattern"],
+                "action": normalized["action"],
+                "forward_to": normalized["forward_to"],
                 "enabled": True,
             }
         )
@@ -757,6 +551,8 @@ def _build_spamassassin_rule_lines(filters: list[dict[str, Any]]) -> list[str]:
     lines: list[str] = []
     for rule in _enabled_rules(filters):
         normalized = _normalize_filter(rule)
+        if normalized["action"] != "quarantine":
+            continue
         name = _rule_name(normalized)
         regex = _sa_regex(normalized["pattern"])
         if normalized["field"] == "subject":
@@ -820,24 +616,9 @@ def _count_patterns_in_custom_file(path: Path) -> tuple[int, int, int]:
     if not path.is_file():
         return 0, 0, 0
     text = path.read_text(encoding="utf-8", errors="replace")
-    subject_block = re.search(
-        r"@SUBJECT_PATTERNS\s*=\s*\((.*?)\);",
-        text,
-        flags=re.DOTALL,
-    )
-    from_block = re.search(
-        r"@FROM_PATTERNS\s*=\s*\((.*?)\);",
-        text,
-        flags=re.DOTALL,
-    )
-    body_block = re.search(
-        r"@BODY_PATTERNS\s*=\s*\((.*?)\);",
-        text,
-        flags=re.DOTALL,
-    )
-    subject_count = len(re.findall(r"qr/", subject_block.group(1))) if subject_block else 0
-    from_count = len(re.findall(r"qr/", from_block.group(1))) if from_block else 0
-    body_count = len(re.findall(r"qr/", body_block.group(1))) if body_block else 0
+    subject_count = len(re.findall(r"field\s*=>\s*'subject'", text))
+    from_count = len(re.findall(r"field\s*=>\s*'from'", text))
+    body_count = len(re.findall(r"field\s*=>\s*'body'", text))
     return subject_count, from_count, body_count
 
 
@@ -938,7 +719,8 @@ def _diagnostics(filters: list[dict[str, Any]]) -> dict[str, Any]:
     amavis_hook_loaded = (
         MARKER_CUSTOM_HOOK_BEGIN in amavis_content
         and do_line in amavis_content
-        and "before_send quarantine" in custom_text
+        and "sub Amavis::Custom::before_send" in custom_text
+        and "mailpanel_action" in custom_text
     )
     include_do_loaded = do_line in include_content
     sieve_path = dovecot_global_sieve_path()
@@ -987,8 +769,10 @@ def _apply_filters(filters: list[dict[str, Any]]) -> list[str]:
     custom_path.parent.mkdir(parents=True, exist_ok=True)
     if "MailPanel::Filters" not in custom_content:
         raise ContentFilterError("Сборка фильтров MailPanel не удалась.")
-    if "before_send quarantine" not in custom_content:
-        raise ContentFilterError("Сборка quarantine hook MailPanel не удалась.")
+    if "sub Amavis::Custom::before_send" not in custom_content:
+        raise ContentFilterError("Сборка before_send hook MailPanel не удалась.")
+    if "mailpanel_action" not in custom_content:
+        raise ContentFilterError("Сборка action hook MailPanel не удалась.")
     _write_readable(custom_path, custom_content)
     _validate_perl_custom_filters(custom_path)
 
@@ -1055,11 +839,12 @@ def list_content_filters() -> dict[str, Any]:
     diagnostics = _diagnostics(raw_filters)
     notes = [
         "Правила работают через хук Amavis (включая письма между ящиками на сервере).",
-        "Для внутренней почты дополнительно применяется глобальный Sieve (папка Junk).",
-        "При совпадении Amavis переключает политику на карантин (обход MYUSERS D_PASS).",
-        "Дополнительно дублируются в SpamAssassin для внешней почты.",
-        "При совпадении письмо попадает в карантин (тип «Спам»).",
+        "Для внутренней почты дополнительно применяется глобальный Sieve.",
+        "Действия: «Карантин» — в карантин спама; «Удалить» — отбросить без доставки; "
+        "«Переслать» — доставить на указанный адрес вместо исходных получателей "
+        "(пересылка выполняется хуком Amavis; нужна проверка внутренней почты).",
         "Поиск без учёта регистра, по вхождению указанного текста.",
+        "Правила с действием «Карантин» дублируются в SpamAssassin для внешней почты.",
         "Отправители из белого списка могут обходить проверку SpamAssassin.",
     ]
     if diagnostics["active_rules"] and not diagnostics.get("amavis_hook_loaded"):
@@ -1077,24 +862,25 @@ def list_content_filters() -> dict[str, Any]:
     }
 
 
-def create_content_filter(field: str, pattern: str, enabled: bool = True) -> dict[str, Any]:
+def create_content_filter(
+    field: str,
+    pattern: str,
+    enabled: bool = True,
+    action: str = "quarantine",
+    forward_to: str | None = None,
+) -> dict[str, Any]:
     filters = _read_filters_file()
     rule = _normalize_filter(
         {
             "id": secrets.token_hex(4),
             "field": field,
             "pattern": pattern,
+            "action": action,
+            "forward_to": forward_to or "",
             "enabled": enabled,
         }
     )
-    filters.append(
-        {
-            "id": rule["id"],
-            "field": rule["field"],
-            "pattern": rule["pattern"],
-            "enabled": rule["enabled"],
-        }
-    )
+    filters.append(_storage_filter(rule))
     _write_filters_file(filters)
     try:
         warnings = _apply_filters(filters)
@@ -1111,6 +897,8 @@ def update_content_filter(
     field: str | None = None,
     pattern: str | None = None,
     enabled: bool | None = None,
+    action: str | None = None,
+    forward_to: str | None = None,
 ) -> dict[str, Any]:
     rule_id = _validate_rule_id(rule_id)
     filters = _read_filters_file()
@@ -1123,16 +911,18 @@ def update_content_filter(
         current["field"] = _validate_field(field)
     if pattern is not None:
         current["pattern"] = _validate_pattern(pattern)
+    if action is not None:
+        current["action"] = _validate_action(action)
+    if forward_to is not None:
+        current["forward_to"] = forward_to
+    next_action = _validate_action(str(current.get("action", "quarantine")))
+    if next_action != "forward":
+        current.pop("forward_to", None)
     if enabled is not None:
         current["enabled"] = bool(enabled)
 
     rule = _normalize_filter(current)
-    filters[index] = {
-        "id": rule["id"],
-        "field": rule["field"],
-        "pattern": rule["pattern"],
-        "enabled": rule["enabled"],
-    }
+    filters[index] = _storage_filter(rule)
     _write_filters_file(filters)
     try:
         warnings = _apply_filters(filters)

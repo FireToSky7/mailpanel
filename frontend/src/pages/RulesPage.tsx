@@ -9,9 +9,20 @@ const FIELD_OPTIONS = [
   { value: 'body', label: 'Текст письма' },
 ] as const
 
+const ACTION_OPTIONS = [
+  { value: 'quarantine', label: 'Карантин' },
+  { value: 'delete', label: 'Удалить' },
+  { value: 'forward', label: 'Переслать' },
+] as const
+
+type FieldValue = (typeof FIELD_OPTIONS)[number]['value']
+type ActionValue = (typeof ACTION_OPTIONS)[number]['value']
+
 export default function RulesPage() {
   const [data, setData] = useState<ContentFiltersData | null>(null)
-  const [field, setField] = useState<'subject' | 'body' | 'from'>('subject')
+  const [field, setField] = useState<FieldValue>('subject')
+  const [action, setAction] = useState<ActionValue>('quarantine')
+  const [forwardTo, setForwardTo] = useState('')
   const [pattern, setPattern] = useState('')
   const role = getUser()?.role
   const canWrite = role === 'superadmin' || role === 'admin'
@@ -30,9 +41,20 @@ export default function RulesPage() {
       notify.error('Укажите текст для поиска')
       return
     }
+    if (action === 'forward' && !forwardTo.trim()) {
+      notify.error('Укажите адрес для пересылки')
+      return
+    }
     try {
-      await api.createContentFilter({ field, pattern: text, enabled: true })
+      await api.createContentFilter({
+        field,
+        pattern: text,
+        action,
+        forward_to: action === 'forward' ? forwardTo.trim() : null,
+        enabled: true,
+      })
       setPattern('')
+      if (action === 'forward') setForwardTo('')
       notify.success('Правило добавлено')
       await load()
     } catch (e) {
@@ -85,9 +107,10 @@ export default function RulesPage() {
       <div className="card">
         <h3>Входящие фильтры</h3>
         <p className="muted">
-          Если во входящем письме в теме, отправителе или тексте встречается указанная строка, письмо
-          попадает в карантин (тип «Спам»). Поиск без учёта регистра, по вхождению подстроки
-          (например, имя содержит «spam» или адрес «@spamer.ru»).
+          Если во входящем письме в теме, отправителе или тексте встречается указанная строка,
+          выполняется выбранное действие: карантин, удаление или пересылка на другой адрес
+          (например, все письма с темой «Директору» — на ящик директора).
+          Поиск без учёта регистра, по вхождению подстроки.
           Для писем между ящиками на этом сервере нужна проверка внутренней почты в Amavis.
         </p>
         {diagnostics && (
@@ -120,18 +143,35 @@ export default function RulesPage() {
           </div>
         )}
         {canWrite && (
-          <div className="form-row" style={{ marginBottom: 16 }}>
-            <select value={field} onChange={(e) => setField(e.target.value as 'subject' | 'body' | 'from')}>
-              {FIELD_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <input
-              placeholder="Например: spam или @spamer.ru"
-              value={pattern}
-              onChange={(e) => setPattern(e.target.value)}
-            />
-            <button onClick={create}>Добавить правило</button>
+          <div style={{ marginBottom: 16 }}>
+            <div className="form-row" style={{ marginBottom: action === 'forward' ? 10 : 0 }}>
+              <select value={field} onChange={(e) => setField(e.target.value as FieldValue)}>
+                {FIELD_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <input
+                placeholder="Например: spam или Директору"
+                value={pattern}
+                onChange={(e) => setPattern(e.target.value)}
+              />
+              <select value={action} onChange={(e) => setAction(e.target.value as ActionValue)}>
+                {ACTION_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <button onClick={create}>Добавить правило</button>
+            </div>
+            {action === 'forward' && (
+              <div className="form-row">
+                <input
+                  style={{ minWidth: 280 }}
+                  placeholder="Адрес пересылки, например director@example.ru"
+                  value={forwardTo}
+                  onChange={(e) => setForwardTo(e.target.value)}
+                />
+              </div>
+            )}
           </div>
         )}
         <table>

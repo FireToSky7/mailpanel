@@ -169,12 +169,16 @@ class MailPolicyUpdate(BaseModel):
 class ContentFilterCreate(BaseModel):
     field: Literal["subject", "body", "from"]
     pattern: str = Field(min_length=1, max_length=200)
+    action: Literal["quarantine", "delete", "forward"] = "quarantine"
+    forward_to: str | None = Field(default=None, max_length=200)
     enabled: bool = True
 
 
 class ContentFilterUpdate(BaseModel):
     field: Literal["subject", "body", "from"] | None = None
     pattern: str | None = Field(default=None, min_length=1, max_length=200)
+    action: Literal["quarantine", "delete", "forward"] | None = None
+    forward_to: str | None = Field(default=None, max_length=200)
     enabled: bool | None = None
 
 
@@ -764,13 +768,19 @@ def post_content_filter(
     user: PanelUser = Depends(require_permission("antispam.write")),
 ):
     try:
-        rule = content_filter_ops.create_content_filter(payload.field, payload.pattern, payload.enabled)
+        rule = content_filter_ops.create_content_filter(
+            payload.field,
+            payload.pattern,
+            payload.enabled,
+            action=payload.action,
+            forward_to=payload.forward_to,
+        )
         _audit(
             user,
             request,
             "rule_create",
             "content_filter",
-            f"{rule['field']}:{rule['pattern']}",
+            f"{rule['field']}:{rule['pattern']}:{rule['action']}",
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -797,6 +807,8 @@ def put_content_filter(
             field=payload.field,
             pattern=payload.pattern,
             enabled=payload.enabled,
+            action=payload.action,
+            forward_to=payload.forward_to,
         )
         _audit(user, request, "rule_update", "content_filter", rule_id)
     except ValueError as exc:

@@ -93,8 +93,9 @@ export type ContentFilter = {
   field: 'subject' | 'body' | 'from'
   field_label: string
   pattern: string
-  action: string
+  action: 'quarantine' | 'delete' | 'forward'
   action_label: string
+  forward_to?: string
   enabled: boolean
 }
 
@@ -413,12 +414,27 @@ export const api = {
       body: JSON.stringify({ scan_internal_mail }),
     }),
   contentFilters: () => request<ContentFiltersData>('/api/rules'),
-  createContentFilter: (body: { field: 'subject' | 'body' | 'from'; pattern: string; enabled?: boolean }) =>
+  createContentFilter: (body: {
+    field: 'subject' | 'body' | 'from'
+    pattern: string
+    action?: 'quarantine' | 'delete' | 'forward'
+    forward_to?: string | null
+    enabled?: boolean
+  }) =>
     request<{ ok: boolean; item: ContentFilter }>('/api/rules', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  updateContentFilter: (ruleId: string, body: { field?: 'subject' | 'body' | 'from'; pattern?: string; enabled?: boolean }) =>
+  updateContentFilter: (
+    ruleId: string,
+    body: {
+      field?: 'subject' | 'body' | 'from'
+      pattern?: string
+      action?: 'quarantine' | 'delete' | 'forward'
+      forward_to?: string | null
+      enabled?: boolean
+    },
+  ) =>
     request<{ ok: boolean; item: ContentFilter }>(`/api/rules/${encodeURIComponent(ruleId)}`, {
       method: 'PUT',
       body: JSON.stringify(body),
