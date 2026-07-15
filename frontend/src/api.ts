@@ -375,6 +375,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ entries, comment }),
     }),
+  updateWblistComment: (type: string, entry: string, comment = '') =>
+    request<{ ok: boolean; address: string; comment: string }>(`/api/wblist/${type}/comment`, {
+      method: 'PUT',
+      body: JSON.stringify({ entry, comment }),
+    }),
   deleteWblist: (type: string, entries: string[]) =>
     request<{ ok: boolean }>(`/api/wblist/${type}`, { method: 'DELETE', body: JSON.stringify({ entries }) }),
   spam: () => request<SpamConfig>('/api/spam'),

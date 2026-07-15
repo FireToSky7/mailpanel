@@ -100,15 +100,68 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.entry-list .entry-actions {
-  flex: 0 0 40px;
-  display: flex;
-  justify-content: flex-end;
+.entry-list .entry-comment-empty {
+  font-style: italic;
+  opacity: 0.7;
 }
-.entry-list .entry-remove {
+.entry-list .entry-comment-edit {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.entry-list .entry-comment-edit input {
+  flex: 1;
+  min-width: 160px;
+}
+.entry-list .entry-comment-edit button {
+  flex: 0 0 auto;
+  min-width: auto;
+}
+.entry-list .entry-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+}
+.entry-list .entry-remove,
+.entry-list .entry-edit {
   min-width: 32px;
   padding: 4px 10px;
   line-height: 1.2;
+}
+.entry-tip {
+  position: relative;
+  cursor: default;
+}
+.entry-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  max-width: min(480px, 70vw);
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #0b1220;
+  border: 1px solid #334155;
+  color: #e2e8f0;
+  font-size: 0.9em;
+  font-style: normal;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease 0.45s, visibility 0s linear 0.6s;
+}
+.entry-tip:hover::after {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0.45s, 0.45s;
 }
 .data-table { width: 100%; }
 .data-table th,

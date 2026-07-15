@@ -130,6 +130,17 @@ export default function AntispamPage() {
     }
   }
 
+  async function editListComment(type: 'whitelist' | 'blacklist', entry: string, comment: string) {
+    try {
+      await api.updateWblistComment(type, entry, comment)
+      notify.success(comment.trim() ? 'Комментарий сохранён' : 'Комментарий удалён')
+      await load()
+    } catch (e) {
+      notify.error(errorMessage(e))
+      throw e
+    }
+  }
+
   async function saveScore() {
     const value = parseFloat(score)
     if (!Number.isFinite(value) || value < 0 || value > 20) {
@@ -283,7 +294,9 @@ export default function AntispamPage() {
           items={whitelist}
           comments={whitelistComments}
           canRemove={canWrite}
+          canEditComment={canWrite}
           onRemove={(entry) => removeFromList('whitelist', entry)}
+          onEditComment={(entry, comment) => editListComment('whitelist', entry, comment)}
           emptyText="Список пуст"
         />
       </div>
@@ -317,7 +330,9 @@ export default function AntispamPage() {
             items={blacklist}
             comments={blacklistComments}
             canRemove
+            canEditComment
             onRemove={(entry) => removeFromList('blacklist', entry)}
+            onEditComment={(entry, comment) => editListComment('blacklist', entry, comment)}
             emptyText="Список пуст"
           />
         </div>

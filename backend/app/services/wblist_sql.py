@@ -117,6 +117,40 @@ def _remove_comments(list_type: str, addresses: list[str]) -> None:
         _write_comments_file(data)
 
 
+def update_wblist_comment(
+    list_type: str,
+    address: str,
+    comment: str | None = None,
+    account: str | None = None,
+) -> dict[str, str]:
+    """Обновить комментарий у существующей записи списка."""
+    wb_flag = "W" if list_type == "whitelist" else "B"
+    wb_account = normalize_wblist_account(account)
+    sender = address.strip().lower()
+    if not sender or not classify_address(sender):
+        raise ValueError(f"Некорректный адрес: {address}")
+    normalized_comment = _normalize_comment(comment)
+
+    with amavisd_conn() as conn:
+        user_ids = _user_ids_for_account(conn, wb_account)
+        if not user_ids:
+            raise ValueError(f"«{sender}» нет в списке")
+        row = fetch_one(conn, "SELECT id FROM mailaddr WHERE email = %s LIMIT 1", (sender,))
+        if not row:
+            raise ValueError(f"«{sender}» нет в списке")
+        placeholders = ", ".join(["%s"] * len(user_ids))
+        existing = fetch_one(
+            conn,
+            f"SELECT 1 FROM wblist WHERE rid IN ({placeholders}) AND sid = %s AND wb = %s LIMIT 1",
+            (*user_ids, int(row["id"]), wb_flag),
+        )
+        if not existing:
+            raise ValueError(f"«{sender}» нет в списке")
+
+    _set_comment(list_type, sender, normalized_comment)
+    return {"address": sender, "comment": normalized_comment}
+
+
 def _user_ids_for_account(conn, account: str) -> list[int]:
     rows = fetch_all(conn, "SELECT id FROM users WHERE email = %s ORDER BY id", (account,))
     return [int(row["id"]) for row in rows]

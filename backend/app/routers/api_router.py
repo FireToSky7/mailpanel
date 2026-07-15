@@ -107,6 +107,11 @@ class WblistRequest(BaseModel):
     comment: str = ""
 
 
+class WblistCommentRequest(BaseModel):
+    entry: str = Field(min_length=1)
+    comment: str = ""
+
+
 class GreylistRequest(BaseModel):
     to_addr: str
     from_addr: str | None = None
@@ -436,6 +441,29 @@ def post_wblist(
             ) from exc
         raise HTTPException(400, f"Не удалось добавить в список: {message}") from exc
     return {"ok": True}
+
+
+@router.put("/wblist/{list_type}/comment", dependencies=[Depends(require_permission("antispam.write"))])
+def put_wblist_comment(
+    list_type: str,
+    payload: WblistCommentRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("antispam.write")),
+):
+    if list_type not in ("whitelist", "blacklist"):
+        raise HTTPException(400, "Invalid list type")
+    try:
+        validated = iredapd.validate_wblist_entry(payload.entry)
+        result = iredapd.update_wblist_comment(list_type, validated, payload.comment)
+        detail = result["address"]
+        if result["comment"]:
+            detail = f"{detail} ({result['comment']})"
+        _audit(user, request, "wblist_comment", list_type, detail)
+    except IredapdError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, **result}
 
 
 @router.delete("/wblist/{list_type}", dependencies=[Depends(require_permission("antispam.write"))])

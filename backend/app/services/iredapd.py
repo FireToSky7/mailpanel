@@ -92,6 +92,15 @@ def delete_wblist(list_type: str, senders: list[str], account: str | None = None
     wblist_sql.delete_wblist(list_type, senders, account)
 
 
+def update_wblist_comment(
+    list_type: str,
+    address: str,
+    comment: str | None = None,
+    account: str | None = None,
+) -> dict[str, str]:
+    return wblist_sql.update_wblist_comment(list_type, address, comment, account)
+
+
 def list_greylisting() -> str:
     return _run_script(get_config().paths.greylisting_script, ["--list"], "greylisting_admin.py")
 
