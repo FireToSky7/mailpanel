@@ -72,14 +72,20 @@ def _run_script(script: str, args: list[str], default_name: str) -> str:
     )
 
 
-def list_wblist(list_type: str, account: str | None = None) -> list[str]:
+def list_wblist(list_type: str, account: str | None = None) -> list[dict[str, str]]:
     return wblist_sql.list_wblist(list_type, account)
 
 
-def add_wblist(list_type: str, senders: list[str], account: str | None = None, outbound: bool = False) -> None:
+def add_wblist(
+    list_type: str,
+    senders: list[str],
+    account: str | None = None,
+    outbound: bool = False,
+    comment: str | None = None,
+) -> None:
     if outbound:
         raise IredapdError("Исходящие списки пока не поддерживаются в панели")
-    wblist_sql.add_wblist(list_type, senders, account)
+    wblist_sql.add_wblist(list_type, senders, account, comment=comment)
 
 
 def delete_wblist(list_type: str, senders: list[str], account: str | None = None) -> None:

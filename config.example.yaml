@@ -37,6 +37,7 @@ paths:
   amavisd_config: "/etc/amavisd/amavisd.conf"
   banned_extensions_file: "/etc/mailpanel/banned_extensions.txt"
   antispam_policy_file: "/etc/mailpanel/antispam_policy.yaml"
+  wblist_comments_file: "/etc/mailpanel/wblist_comments.yaml"
   content_filters_file: "/etc/mailpanel/content_filters.yaml"
   spamassassin_filters_file: "/etc/mail/spamassassin/mailpanel_filters.cf"
   amavis_custom_filters_file: "/etc/mailpanel/amavis_custom_filters.conf"

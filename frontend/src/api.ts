@@ -368,9 +368,13 @@ export const api = {
       `/api/groups/${encodeURIComponent(address)}/members/remove`,
       { method: 'POST', body: JSON.stringify({ member }) },
     ),
-  wblist: (type: string) => request<{ entries: string[] }>(`/api/wblist/${type}`),
-  addWblist: (type: string, entries: string[]) =>
-    request<{ ok: boolean }>(`/api/wblist/${type}`, { method: 'POST', body: JSON.stringify({ entries }) }),
+  wblist: (type: string) =>
+    request<{ entries: Array<string | { address: string; comment?: string }> }>(`/api/wblist/${type}`),
+  addWblist: (type: string, entries: string[], comment = '') =>
+    request<{ ok: boolean }>(`/api/wblist/${type}`, {
+      method: 'POST',
+      body: JSON.stringify({ entries, comment }),
+    }),
   deleteWblist: (type: string, entries: string[]) =>
     request<{ ok: boolean }>(`/api/wblist/${type}`, { method: 'DELETE', body: JSON.stringify({ entries }) }),
   spam: () => request<SpamConfig>('/api/spam'),

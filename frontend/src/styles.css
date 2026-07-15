@@ -80,9 +80,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-bottom: 1px solid #243041;
 }
 .entry-list li:last-child { border-bottom: none; }
-.entry-list .entry-label {
+.entry-list .entry-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.entry-list .entry-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.entry-list .entry-comment {
+  color: #94a3b8;
+  font-size: 0.88em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -7,8 +7,12 @@ import { notify } from '../notify'
 export default function AntispamPage() {
   const [whitelist, setWhitelist] = useState<string[]>([])
   const [blacklist, setBlacklist] = useState<string[]>([])
+  const [whitelistComments, setWhitelistComments] = useState<Record<string, string>>({})
+  const [blacklistComments, setBlacklistComments] = useState<Record<string, string>>({})
   const [whitelistEntry, setWhitelistEntry] = useState('')
+  const [whitelistComment, setWhitelistComment] = useState('')
   const [blacklistEntry, setBlacklistEntry] = useState('')
+  const [blacklistComment, setBlacklistComment] = useState('')
   const [score, setScore] = useState('5.0')
   const [bannedExtensions, setBannedExtensions] = useState<string[]>([])
   const [bannedEntry, setBannedEntry] = useState('')
@@ -17,23 +21,43 @@ export default function AntispamPage() {
   const role = getUser()?.role
   const canWrite = role === 'superadmin' || role === 'admin'
 
+  function parseWblistEntries(raw: Array<string | { address: string; comment?: string }>) {
+    const items: string[] = []
+    const comments: Record<string, string> = {}
+    for (const entry of raw) {
+      if (typeof entry === 'string') {
+        items.push(entry)
+        continue
+      }
+      items.push(entry.address)
+      if (entry.comment?.trim()) comments[entry.address] = entry.comment.trim()
+    }
+    return { items, comments }
+  }
+
   async function load() {
     const errors: string[] = []
 
     try {
       const wl = await api.wblist('whitelist')
-      setWhitelist(wl.entries)
+      const parsed = parseWblistEntries(wl.entries)
+      setWhitelist(parsed.items)
+      setWhitelistComments(parsed.comments)
     } catch (e) {
       errors.push(`Белый список: ${errorMessage(e)}`)
       setWhitelist([])
+      setWhitelistComments({})
     }
 
     try {
       const bl = await api.wblist('blacklist')
-      setBlacklist(bl.entries)
+      const parsed = parseWblistEntries(bl.entries)
+      setBlacklist(parsed.items)
+      setBlacklistComments(parsed.comments)
     } catch (e) {
       errors.push(`Чёрный список: ${errorMessage(e)}`)
       setBlacklist([])
+      setBlacklistComments({})
     }
 
     try {
@@ -75,14 +99,19 @@ export default function AntispamPage() {
 
   useEffect(() => { load() }, [])
 
-  async function addToList(type: 'whitelist' | 'blacklist', entry: string, clear: () => void) {
+  async function addToList(
+    type: 'whitelist' | 'blacklist',
+    entry: string,
+    comment: string,
+    clear: () => void,
+  ) {
     const value = entry.trim()
     if (!value) {
       notify.error('Укажите запись для добавления')
       return
     }
     try {
-      await api.addWblist(type, [value])
+      await api.addWblist(type, [value], comment.trim())
       clear()
       notify.success('Запись добавлена')
       await load()
@@ -228,13 +257,31 @@ export default function AntispamPage() {
       )}
       <div className="card">
         <h3>Белый список</h3>
-        <p className="muted">Глобальный список для всего сервера: email, домен (@domain.ru) или IP.</p>
+        <p className="muted">Глобальный список для всего сервера: email, домен (@domain.ru) или IP. Комментарий необязателен.</p>
         <div className="form-row">
           <input placeholder="email / @domain.ru / IP" value={whitelistEntry} onChange={(e) => setWhitelistEntry(e.target.value)} />
-          {canWrite && <button onClick={() => addToList('whitelist', whitelistEntry, () => setWhitelistEntry(''))}>Добавить</button>}
+          <input
+            placeholder="Комментарий (причина)"
+            value={whitelistComment}
+            onChange={(e) => setWhitelistComment(e.target.value)}
+            maxLength={200}
+          />
+          {canWrite && (
+            <button
+              onClick={() =>
+                addToList('whitelist', whitelistEntry, whitelistComment, () => {
+                  setWhitelistEntry('')
+                  setWhitelistComment('')
+                })
+              }
+            >
+              Добавить
+            </button>
+          )}
         </div>
         <EntryList
           items={whitelist}
+          comments={whitelistComments}
           canRemove={canWrite}
           onRemove={(entry) => removeFromList('whitelist', entry)}
           emptyText="Список пуст"
@@ -245,14 +292,30 @@ export default function AntispamPage() {
           <h3>Чёрный список</h3>
           <p className="muted">
             Блокирует <strong>входящие</strong> письма от указанных отправителей (email, домен или IP).
-            Не запрещает отправку с ящиков на сервере через Roundcube.
+            Не запрещает отправку с ящиков на сервере через Roundcube. Комментарий необязателен.
           </p>
           <div className="form-row">
             <input placeholder="email / @domain.ru / IP" value={blacklistEntry} onChange={(e) => setBlacklistEntry(e.target.value)} />
-            <button onClick={() => addToList('blacklist', blacklistEntry, () => setBlacklistEntry(''))}>Добавить</button>
+            <input
+              placeholder="Комментарий (причина)"
+              value={blacklistComment}
+              onChange={(e) => setBlacklistComment(e.target.value)}
+              maxLength={200}
+            />
+            <button
+              onClick={() =>
+                addToList('blacklist', blacklistEntry, blacklistComment, () => {
+                  setBlacklistEntry('')
+                  setBlacklistComment('')
+                })
+              }
+            >
+              Добавить
+            </button>
           </div>
           <EntryList
             items={blacklist}
+            comments={blacklistComments}
             canRemove
             onRemove={(entry) => removeFromList('blacklist', entry)}
             emptyText="Список пуст"

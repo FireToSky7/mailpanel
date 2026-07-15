@@ -104,6 +104,7 @@ class ForwardingRemove(BaseModel):
 
 class WblistRequest(BaseModel):
     entries: list[str] = Field(min_length=1)
+    comment: str = ""
 
 
 class GreylistRequest(BaseModel):
@@ -417,8 +418,11 @@ def post_wblist(
         raise HTTPException(400, "Укажите запись для добавления в список")
     try:
         validated = [iredapd.validate_wblist_entry(e) for e in payload.entries]
-        iredapd.add_wblist(list_type, validated, None)
-        _audit(user, request, "wblist_add", list_type, ", ".join(validated))
+        iredapd.add_wblist(list_type, validated, None, comment=payload.comment)
+        detail = ", ".join(validated)
+        if payload.comment.strip():
+            detail = f"{detail} ({payload.comment.strip()})"
+        _audit(user, request, "wblist_add", list_type, detail)
     except IredapdError as exc:
         raise HTTPException(400, str(exc)) from exc
     except ValueError as exc:
