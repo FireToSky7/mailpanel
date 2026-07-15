@@ -119,24 +119,65 @@ def mailbox_exists(username: str) -> bool:
         return fetch_one(conn, "SELECT username FROM mailbox WHERE username = %s", (email,)) is not None
 
 
-def list_mailboxes(domain: str | None = None) -> list[dict[str, Any]]:
-    query = (
-        "SELECT m.username, m.name, m.domain, m.quota, m.active, m.created, m.modified, "
-        "COALESCE(u.bytes, 0) AS bytes_used, COALESCE(u.messages, 0) AS messages "
-        "FROM mailbox m "
-        "LEFT JOIN used_quota u ON m.username = u.username"
+def _has_last_login_table(conn) -> bool:
+    row = fetch_one(
+        conn,
+        "SELECT 1 AS ok FROM information_schema.tables "
+        "WHERE table_schema = DATABASE() AND table_name = 'last_login' LIMIT 1",
     )
-    params: tuple[Any, ...] = ()
-    if domain:
-        query += " WHERE m.domain = %s"
-        params = (domain.lower(),)
-    query += " ORDER BY m.username"
+    return bool(row)
+
+
+def list_mailboxes(domain: str | None = None) -> list[dict[str, Any]]:
     with vmail_conn() as conn:
+        has_login = _has_last_login_table(conn)
+        if has_login:
+            query = (
+                "SELECT m.username, m.name, m.domain, m.quota, m.active, m.created, m.modified, "
+                "COALESCE(u.bytes, 0) AS bytes_used, COALESCE(u.messages, 0) AS messages, "
+                "GREATEST(COALESCE(ll.imap, 0), COALESCE(ll.pop3, 0)) AS last_login_unix "
+                "FROM mailbox m "
+                "LEFT JOIN used_quota u ON m.username = u.username "
+                "LEFT JOIN last_login ll ON m.username = ll.username"
+            )
+        else:
+            query = (
+                "SELECT m.username, m.name, m.domain, m.quota, m.active, m.created, m.modified, "
+                "COALESCE(u.bytes, 0) AS bytes_used, COALESCE(u.messages, 0) AS messages, "
+                "0 AS last_login_unix "
+                "FROM mailbox m "
+                "LEFT JOIN used_quota u ON m.username = u.username"
+            )
+        params: tuple[Any, ...] = ()
+        if domain:
+            query += " WHERE m.domain = %s"
+            params = (domain.lower(),)
+        query += " ORDER BY m.username"
         rows = fetch_all(conn, query, params)
+
     for row in rows:
         bytes_used = int(row.get("bytes_used") or 0)
         row["used_mb"] = round(bytes_used / (1024 * 1024), 1)
+        ts = int(row.get("last_login_unix") or 0)
+        if ts > 0:
+            row["last_login"] = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+            row["last_login_unix"] = ts
+        else:
+            row["last_login"] = ""
+            row["last_login_unix"] = 0
     return rows
+
+
+def update_mailbox_name(username: str, name: str) -> dict[str, str]:
+    email = username.lower()
+    comment = (name or "").strip()
+    if len(comment) > 400:
+        raise ValueError("Комментарий слишком длинный (макс. 400 символов)")
+    with vmail_conn() as conn:
+        if not fetch_one(conn, "SELECT username FROM mailbox WHERE username = %s", (email,)):
+            raise ValueError(f"Ящик не найден: {email}")
+        execute(conn, "UPDATE mailbox SET name = %s WHERE username = %s", (comment, email))
+    return {"username": email, "name": comment}
 
 
 def create_mailbox(username: str, password: str, name: str, quota: int = 1024) -> None:

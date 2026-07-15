@@ -20,6 +20,8 @@ export type Mailbox = {
   used_mb?: number
   bytes_used?: number
   messages?: number
+  last_login?: string
+  last_login_unix?: number
 }
 
 export type ForwardingEntry = {
@@ -328,6 +330,11 @@ export const api = {
     request<{ ok: boolean }>(`/api/mailboxes/${encodeURIComponent(username)}/active`, {
       method: 'PUT',
       body: JSON.stringify({ active }),
+    }),
+  mailboxName: (username: string, name: string) =>
+    request<{ ok: boolean; username: string; name: string }>(`/api/mailboxes/${encodeURIComponent(username)}/name`, {
+      method: 'PUT',
+      body: JSON.stringify({ name }),
     }),
   mailboxForwarding: (username: string) =>
     request<ForwardingInfo>(`/api/mailboxes/${encodeURIComponent(username)}/forwarding`),

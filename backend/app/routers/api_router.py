@@ -54,6 +54,10 @@ class MailboxActive(BaseModel):
     active: bool
 
 
+class MailboxNameUpdate(BaseModel):
+    name: str = ""
+
+
 class AliasCreate(BaseModel):
     address: str
     goto: str
@@ -233,6 +237,16 @@ def mailbox_active(username: str, payload: MailboxActive, request: Request, user
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True}
+
+
+@router.put("/mailboxes/{username:path}/name", dependencies=[Depends(require_permission("mail.write"))])
+def mailbox_name(username: str, payload: MailboxNameUpdate, request: Request, user: PanelUser = Depends(require_permission("mail.write"))):
+    try:
+        result = mail_ops.update_mailbox_name(username, payload.name)
+        _audit(user, request, "comment_change", "mailbox", f"{result['username']}: {result['name'] or '—'}")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, **result}
 
 
 @router.get("/mailboxes/{username:path}/forwarding", dependencies=[Depends(require_permission("mail.read"))])

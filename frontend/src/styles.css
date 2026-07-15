@@ -156,6 +156,53 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .data-table td {
   vertical-align: middle;
 }
+.data-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.data-table th.sortable:hover {
+  color: #e2e8f0;
+}
+.status-yes {
+  color: #4ade80;
+  font-weight: 600;
+}
+.status-no {
+  color: #f87171;
+  font-weight: 600;
+}
+.comment-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.comment-cell .cell-ellipsis {
+  flex: 1;
+  min-width: 0;
+}
+.cell-ellipsis {
+  display: block;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inline-edit {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.inline-edit input {
+  min-width: 160px;
+  flex: 1;
+}
+.inline-edit button {
+  flex: 0 0 auto;
+  min-width: auto;
+}
 .data-table th:not(.actions),
 .data-table td:not(.actions) {
   overflow: hidden;
