@@ -41,6 +41,9 @@ export type MailGroup = {
   members: string
   domain: string
   active: number
+  include_everyone?: boolean
+  members_only?: boolean
+  accesspolicy?: string
 }
 
 export type ServiceStatus = {
@@ -361,10 +364,15 @@ export const api = {
   deleteAlias: (address: string) =>
     request<{ ok: boolean }>(`/api/aliases/${encodeURIComponent(address)}`, { method: 'DELETE' }),
   groups: () => request<MailGroup[]>('/api/groups'),
-  createGroup: (body: { address: string; members: string[] }) =>
+  createGroup: (body: { address: string; members: string[]; members_only?: boolean }) =>
     request<{ ok: boolean }>('/api/groups', { method: 'POST', body: JSON.stringify(body) }),
   deleteGroup: (address: string) =>
     request<{ ok: boolean }>(`/api/groups/${encodeURIComponent(address)}`, { method: 'DELETE' }),
+  updateGroupMembersOnly: (address: string, members_only: boolean) =>
+    request<{ ok: boolean; address: string; members_only: boolean }>(
+      `/api/groups/${encodeURIComponent(address)}/members-only`,
+      { method: 'PUT', body: JSON.stringify({ members_only }) },
+    ),
   addGroupMember: (address: string, member: string) =>
     request<{ ok: boolean; members: string[] }>(`/api/groups/${encodeURIComponent(address)}/members`, {
       method: 'POST',

@@ -76,6 +76,7 @@ class AliasCreate(BaseModel):
 class GroupCreate(BaseModel):
     address: str
     members: list[str] = Field(min_length=1)
+    members_only: bool = False
 
     @field_validator("address")
     @classmethod
@@ -85,7 +86,18 @@ class GroupCreate(BaseModel):
     @field_validator("members")
     @classmethod
     def check_members(cls, values: list[str]) -> list[str]:
-        return [normalize_email(item, "Участник") for item in values]
+        cleaned: list[str] = []
+        for item in values:
+            value = item.strip().lower()
+            if not value:
+                continue
+            if value == "everyone" or value.startswith("everyone@"):
+                cleaned.append(value)
+                continue
+            cleaned.append(normalize_email(value, "Участник"))
+        if not cleaned:
+            raise ValueError("Добавьте хотя бы одного участника")
+        return cleaned
 
 
 class GroupMemberRequest(BaseModel):
@@ -94,7 +106,14 @@ class GroupMemberRequest(BaseModel):
     @field_validator("member")
     @classmethod
     def check_member(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value == "everyone" or value.startswith("everyone@"):
+            return value
         return normalize_email(value, "Участник")
+
+
+class GroupMembersOnlyUpdate(BaseModel):
+    members_only: bool
 
 
 class ForwardingUpdate(BaseModel):
@@ -358,16 +377,47 @@ def post_group(payload: GroupCreate, request: Request, user: PanelUser = Depends
     if not payload.address.endswith(f"@{domain}"):
         raise HTTPException(400, f"Группа должна быть в домене @{domain}")
     for member in payload.members:
+        token = member.strip().lower()
+        if token == "everyone" or token == f"everyone@{domain}":
+            continue
         if not member.endswith(f"@{domain}"):
             raise HTTPException(400, f"Участник должен быть в домене @{domain}: {member}")
     try:
-        group_ops.create_group(payload.address, payload.members)
-        _audit(user, request, "create", "group", f"{payload.address} -> {', '.join(payload.members)}")
+        group_ops.create_group(
+            payload.address,
+            payload.members,
+            members_only=payload.members_only,
+        )
+        detail = f"{payload.address} -> {', '.join(payload.members)}"
+        if payload.members_only:
+            detail += " [members_only]"
+        _audit(user, request, "create", "group", detail)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(400, f"Не удалось создать группу: {exc}") from exc
     return {"ok": True}
+
+
+@router.put("/groups/{address:path}/members-only", dependencies=[Depends(require_permission("mail.write"))])
+def put_group_members_only(
+    address: str,
+    payload: GroupMembersOnlyUpdate,
+    request: Request,
+    user: PanelUser = Depends(require_permission("mail.write")),
+):
+    try:
+        result = group_ops.update_group_members_only(address, payload.members_only)
+        _audit(
+            user,
+            request,
+            "group_members_only",
+            "group",
+            f"{result['address']}={'on' if result['members_only'] else 'off'}",
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, **result}
 
 
 @router.delete("/groups/{address:path}", dependencies=[Depends(require_permission("mail.write"))])
@@ -388,7 +438,8 @@ def add_group_member(
     user: PanelUser = Depends(require_permission("mail.write")),
 ):
     domain = get_config().panel.mail_domain.lower()
-    if not payload.member.endswith(f"@{domain}"):
+    token = payload.member.strip().lower()
+    if token not in ("everyone", f"everyone@{domain}") and not payload.member.endswith(f"@{domain}"):
         raise HTTPException(400, f"Участник должен быть в домене @{domain}")
     try:
         members = group_ops.add_group_member(address, payload.member)

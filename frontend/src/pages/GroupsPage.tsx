@@ -1,13 +1,21 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, getUser, type Mailbox, type MailGroup } from '../api'
 import { errorMessage, validateEmail } from '../errors'
 import { notify } from '../notify'
+
+const EVERYONE = 'everyone'
+
+function isEveryoneToken(value: string): boolean {
+  const token = value.trim().toLowerCase()
+  return token === EVERYONE || token.startsWith('everyone@')
+}
 
 export default function GroupsPage() {
   const [items, setItems] = useState<MailGroup[]>([])
   const [mailboxes, setMailboxes] = useState<Mailbox[]>([])
   const [address, setAddress] = useState('')
   const [membersInput, setMembersInput] = useState('')
+  const [membersOnly, setMembersOnly] = useState(true)
   const [selectedGroup, setSelectedGroup] = useState('')
   const [newMember, setNewMember] = useState('')
   const role = getUser()?.role
@@ -41,10 +49,11 @@ export default function GroupsPage() {
       return
     }
     if (!members.length) {
-      notify.error('Укажите хотя бы одного участника')
+      notify.error('Укажите хотя бы одного участника или everyone')
       return
     }
     for (const member of members) {
+      if (isEveryoneToken(member)) continue
       const memberError = validateEmail(member, 'Участник')
       if (memberError) {
         notify.error(memberError)
@@ -52,9 +61,14 @@ export default function GroupsPage() {
       }
     }
     try {
-      await api.createGroup({ address: address.trim(), members })
+      await api.createGroup({
+        address: address.trim(),
+        members,
+        members_only: membersOnly,
+      })
       setAddress('')
       setMembersInput('')
+      setMembersOnly(true)
       notify.success('Группа создана')
       await load()
     } catch (e) {
@@ -74,20 +88,33 @@ export default function GroupsPage() {
     }
   }
 
+  async function toggleMembersOnly(group: MailGroup) {
+    const next = !group.members_only
+    try {
+      await api.updateGroupMembersOnly(group.address, next)
+      notify.success(next ? 'Только участники могут писать на группу' : 'Писать на группу могут все')
+      await load()
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
+  }
+
   async function addMember() {
     if (!selectedGroup) {
       notify.error('Выберите группу')
       return
     }
-    const memberError = validateEmail(newMember, 'Участник')
-    if (memberError) {
-      notify.error(memberError)
-      return
+    if (!isEveryoneToken(newMember)) {
+      const memberError = validateEmail(newMember, 'Участник')
+      if (memberError) {
+        notify.error(memberError)
+        return
+      }
     }
     try {
       await api.addGroupMember(selectedGroup, newMember.trim())
       setNewMember('')
-      notify.success('Участник добавлен')
+      notify.success(isEveryoneToken(newMember) ? 'Добавлен everyone (все ящики домена)' : 'Участник добавлен')
       await load()
     } catch (e) {
       notify.error(errorMessage(e))
@@ -114,8 +141,9 @@ export default function GroupsPage() {
       <div className="card">
         <h3>Групповые адреса</h3>
         <p className="muted">
-          Группа — общий адрес без ящика. Письмо на группу доставляется всем участникам
-          (например, it@example.ru → u1@example.ru, u2@example.ru).
+          Группа — общий адрес без ящика. Письмо на группу доставляется всем участникам.
+          Специальный код <code>everyone</code> означает все активные ящики домена
+          (новые ящики добавляются автоматически).
         </p>
         {canWrite && (
           <>
@@ -128,7 +156,7 @@ export default function GroupsPage() {
             </div>
             <div className="form-row">
               <textarea
-                placeholder="Участники: u1@example.ru, u2@example.ru (через запятую или с новой строки)"
+                placeholder="Участники: everyone или u1@example.ru, u2@example.ru"
                 value={membersInput}
                 onChange={(e) => setMembersInput(e.target.value)}
                 rows={3}
@@ -136,6 +164,18 @@ export default function GroupsPage() {
               />
               <button onClick={create}>Создать группу</button>
             </div>
+            <label className="form-row" style={{ alignItems: 'center', gap: 10 }}>
+              <input
+                type="checkbox"
+                checked={membersOnly}
+                onChange={(e) => setMembersOnly(e.target.checked)}
+              />
+              Только участники группы могут отправлять на этот адрес
+            </label>
+            <p className="muted" style={{ marginTop: 0 }}>
+              Защита от спама: посторонний, узнав адрес группы, не сможет разослать письмо всем.
+              Требует плагин iRedAPD <code>sql_alias_access_policy</code> (обычно включён в iRedMail).
+            </p>
           </>
         )}
         <table>
@@ -143,20 +183,29 @@ export default function GroupsPage() {
             <tr>
               <th>Адрес группы</th>
               <th>Участники</th>
+              <th>Только участники</th>
               {canWrite && <th></th>}
             </tr>
           </thead>
           <tbody>
             {items.length === 0 && (
-              <tr><td colSpan={canWrite ? 3 : 2} className="muted">Групп нет</td></tr>
+              <tr><td colSpan={canWrite ? 4 : 3} className="muted">Групп нет</td></tr>
             )}
             {items.map((group) => (
               <tr key={group.address}>
                 <td>{group.address}</td>
                 <td>{group.members || '—'}</td>
+                <td>
+                  <span className={group.members_only ? 'status-yes' : 'status-no'}>
+                    {group.members_only ? 'Да' : 'Нет'}
+                  </span>
+                </td>
                 {canWrite && (
                   <td className="actions">
                     <button className="secondary" onClick={() => setSelectedGroup(group.address)}>Управлять</button>
+                    <button className="secondary" onClick={() => toggleMembersOnly(group)}>
+                      {group.members_only ? 'Разрешить всем' : 'Только участники'}
+                    </button>
                     <button className="danger" onClick={() => removeGroup(group.address)}>Удалить</button>
                   </td>
                 )}
@@ -177,31 +226,45 @@ export default function GroupsPage() {
             </select>
             <select value={newMember} onChange={(e) => setNewMember(e.target.value)}>
               <option value="">Выберите ящик…</option>
+              <option value={EVERYONE}>{EVERYONE} (все ящики домена)</option>
               {mailboxes.map((mailbox) => (
                 <option key={mailbox.username} value={mailbox.username}>{mailbox.username}</option>
               ))}
             </select>
             <input
-              placeholder="или введите email"
+              placeholder="или email / everyone"
               value={newMember}
               onChange={(e) => setNewMember(e.target.value)}
             />
             <button onClick={addMember} disabled={!selectedGroup}>Добавить</button>
           </div>
+          {selected?.include_everyone && (
+            <p className="muted">
+              Эта группа использует <code>everyone</code>: в рассылку входят все активные ящики домена.
+              Список синхронизируется при создании и удалении ящиков.
+            </p>
+          )}
           {selected ? (
             <table>
               <thead><tr><th>Участник</th><th></th></tr></thead>
               <tbody>
-                {(selected.members || '').split(',').map((item) => item.trim()).filter(Boolean).map((member) => (
-                  <tr key={member}>
-                    <td>{member}</td>
-                    <td>
-                      <button className="danger" onClick={() => removeMember(selected.address, member)}>
-                        Убрать
-                      </button>
-                    </td>
+                {selected.include_everyone ? (
+                  <tr>
+                    <td><code>{EVERYONE}</code> — все ящики домена</td>
+                    <td className="muted">синхронизируется автоматически</td>
                   </tr>
-                ))}
+                ) : (
+                  (selected.members || '').split(',').map((item) => item.trim()).filter(Boolean).map((member) => (
+                    <tr key={member}>
+                      <td>{member}</td>
+                      <td>
+                        <button className="danger" onClick={() => removeMember(selected.address, member)}>
+                          Убрать
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           ) : (

@@ -45,5 +45,6 @@ CREATE TABLE IF NOT EXISTS mail_log_entries (
 
 CREATE TABLE IF NOT EXISTS mail_groups (
     address VARCHAR(255) PRIMARY KEY,
+    include_everyone TINYINT(1) NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

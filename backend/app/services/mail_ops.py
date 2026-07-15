@@ -190,6 +190,9 @@ def create_mailbox(username: str, password: str, name: str, quota: int = 1024) -
     script = _find_create_mail_user_script()
     if script:
         _create_mailbox_via_script(script, email, password, name, quota)
+        from app.services import group_ops
+
+        group_ops.sync_everyone_groups(_dest_domain(email))
         return
 
     local, domain = email.split("@", 1)
@@ -211,6 +214,9 @@ def create_mailbox(username: str, password: str, name: str, quota: int = 1024) -
             "VALUES (%s, %s, %s, %s, 1, 1)",
             (email, email, domain, domain),
         )
+    from app.services import group_ops
+
+    group_ops.sync_everyone_groups(domain)
 
 
 def update_mailbox_quota(username: str, quota: int) -> None:
@@ -240,9 +246,14 @@ def fetch_alias_address(address: str) -> bool:
 
 def delete_mailbox(username: str) -> None:
     email = username.lower()
+    domain = _dest_domain(email)
     with vmail_conn() as conn:
         execute(conn, "DELETE FROM forwardings WHERE address = %s", (email,))
+        execute(conn, "DELETE FROM forwardings WHERE LOWER(forwarding) = LOWER(%s) AND is_list = 1", (email,))
         execute(conn, "DELETE FROM mailbox WHERE username = %s", (email,))
+    from app.services import group_ops
+
+    group_ops.sync_everyone_groups(domain)
 
 
 def update_mailbox_password(username: str, password: str) -> None:
