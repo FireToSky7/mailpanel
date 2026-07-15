@@ -5,12 +5,13 @@ import { notify } from '../notify'
 
 const FIELD_OPTIONS = [
   { value: 'subject', label: 'Тема письма' },
+  { value: 'from', label: 'Отправитель' },
   { value: 'body', label: 'Текст письма' },
 ] as const
 
 export default function RulesPage() {
   const [data, setData] = useState<ContentFiltersData | null>(null)
-  const [field, setField] = useState<'subject' | 'body'>('subject')
+  const [field, setField] = useState<'subject' | 'body' | 'from'>('subject')
   const [pattern, setPattern] = useState('')
   const role = getUser()?.role
   const canWrite = role === 'superadmin' || role === 'admin'
@@ -84,8 +85,9 @@ export default function RulesPage() {
       <div className="card">
         <h3>Входящие фильтры</h3>
         <p className="muted">
-          Если во входящем письме в теме или тексте встречается указанная строка, письмо попадает в карантин
-          (тип «Спам»). Поиск без учёта регистра, по вхождению подстроки.
+          Если во входящем письме в теме, отправителе или тексте встречается указанная строка, письмо
+          попадает в карантин (тип «Спам»). Поиск без учёта регистра, по вхождению подстроки
+          (например, имя содержит «spam» или адрес «@spamer.ru»).
           Для писем между ящиками на этом сервере нужна проверка внутренней почты в Amavis.
         </p>
         {diagnostics && (
@@ -119,13 +121,13 @@ export default function RulesPage() {
         )}
         {canWrite && (
           <div className="form-row" style={{ marginBottom: 16 }}>
-            <select value={field} onChange={(e) => setField(e.target.value as 'subject' | 'body')}>
+            <select value={field} onChange={(e) => setField(e.target.value as 'subject' | 'body' | 'from')}>
               {FIELD_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
             <input
-              placeholder="Например: SPAM"
+              placeholder="Например: spam или @spamer.ru"
               value={pattern}
               onChange={(e) => setPattern(e.target.value)}
             />

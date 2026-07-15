@@ -167,13 +167,13 @@ class MailPolicyUpdate(BaseModel):
 
 
 class ContentFilterCreate(BaseModel):
-    field: Literal["subject", "body"]
+    field: Literal["subject", "body", "from"]
     pattern: str = Field(min_length=1, max_length=200)
     enabled: bool = True
 
 
 class ContentFilterUpdate(BaseModel):
-    field: Literal["subject", "body"] | None = None
+    field: Literal["subject", "body", "from"] | None = None
     pattern: str | None = Field(default=None, min_length=1, max_length=200)
     enabled: bool | None = None
 

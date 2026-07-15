@@ -90,7 +90,7 @@ export type MailPolicyData = {
 
 export type ContentFilter = {
   id: string
-  field: 'subject' | 'body'
+  field: 'subject' | 'body' | 'from'
   field_label: string
   pattern: string
   action: string
@@ -413,12 +413,12 @@ export const api = {
       body: JSON.stringify({ scan_internal_mail }),
     }),
   contentFilters: () => request<ContentFiltersData>('/api/rules'),
-  createContentFilter: (body: { field: 'subject' | 'body'; pattern: string; enabled?: boolean }) =>
+  createContentFilter: (body: { field: 'subject' | 'body' | 'from'; pattern: string; enabled?: boolean }) =>
     request<{ ok: boolean; item: ContentFilter }>('/api/rules', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  updateContentFilter: (ruleId: string, body: { field?: 'subject' | 'body'; pattern?: string; enabled?: boolean }) =>
+  updateContentFilter: (ruleId: string, body: { field?: 'subject' | 'body' | 'from'; pattern?: string; enabled?: boolean }) =>
     request<{ ok: boolean; item: ContentFilter }>(`/api/rules/${encodeURIComponent(ruleId)}`, {
       method: 'PUT',
       body: JSON.stringify(body),
