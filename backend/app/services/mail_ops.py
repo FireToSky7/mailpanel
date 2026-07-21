@@ -649,6 +649,8 @@ def search_logs(
         normalized = date_from.strip().replace("T", " ")
         if len(normalized) == 10:
             normalized += " 00:00:00"
+        elif len(normalized) == 16:
+            normalized += ":00"
         conditions.append("logged_at >= %s")
         params.append(normalized)
     if date_to:
