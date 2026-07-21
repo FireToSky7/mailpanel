@@ -197,9 +197,6 @@ def list_groups(domain: str | None = None) -> list[dict[str, Any]]:
         members_display = row.get("members") or ""
         if include_everyone:
             members_display = EVERYONE_TOKEN
-            concrete = row.get("members") or ""
-            if concrete:
-                members_display = f"{EVERYONE_TOKEN} ({concrete})"
         result.append(
             {
                 "address": row["address"],
