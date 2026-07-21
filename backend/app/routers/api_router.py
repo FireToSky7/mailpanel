@@ -169,7 +169,7 @@ class MailPolicyUpdate(BaseModel):
 class ContentFilterCreate(BaseModel):
     field: Literal["subject", "body", "from"]
     pattern: str = Field(min_length=1, max_length=200)
-    action: Literal["quarantine", "delete", "forward"] = "quarantine"
+    action: Literal["quarantine", "delete", "forward", "add_recipient"] = "quarantine"
     forward_to: str | None = Field(default=None, max_length=200)
     enabled: bool = True
 
@@ -177,7 +177,7 @@ class ContentFilterCreate(BaseModel):
 class ContentFilterUpdate(BaseModel):
     field: Literal["subject", "body", "from"] | None = None
     pattern: str | None = Field(default=None, min_length=1, max_length=200)
-    action: Literal["quarantine", "delete", "forward"] | None = None
+    action: Literal["quarantine", "delete", "forward", "add_recipient"] | None = None
     forward_to: str | None = Field(default=None, max_length=200)
     enabled: bool | None = None
 

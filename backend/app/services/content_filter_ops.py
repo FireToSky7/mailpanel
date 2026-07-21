@@ -23,11 +23,13 @@ MARKER_CUSTOM_HOOK_END = "# MAILPANEL_CUSTOM_HOOK_END"
 FILTER_SCORE = 100.0
 VALID_FIELDS = {"subject", "body", "from"}
 FIELD_LABELS = {"subject": "Тема", "body": "Текст", "from": "Отправитель"}
-VALID_ACTIONS = {"quarantine", "delete", "forward"}
+VALID_ACTIONS = {"quarantine", "delete", "forward", "add_recipient"}
+ACTIONS_NEED_ADDRESS = {"forward", "add_recipient"}
 ACTION_LABELS = {
     "quarantine": "Карантин",
     "delete": "Удалить",
     "forward": "Переслать",
+    "add_recipient": "Добавить получателя",
 }
 RULE_ID_RE = re.compile(r"^[a-z0-9]{6,16}$")
 FORWARD_EMAIL_RE = re.compile(
@@ -116,20 +118,22 @@ def _validate_field(field: str) -> str:
 def _validate_action(action: str) -> str:
     value = (action or "quarantine").strip().lower()
     if value not in VALID_ACTIONS:
-        raise ValueError("Действие должно быть quarantine, delete или forward")
+        raise ValueError(
+            "Действие должно быть quarantine, delete, forward или add_recipient"
+        )
     return value
 
 
 def _validate_forward_to(forward_to: str | None, action: str) -> str:
-    if action != "forward":
+    if action not in ACTIONS_NEED_ADDRESS:
         return ""
     value = (forward_to or "").strip().lower()
     if not value:
-        raise ValueError("Укажите адрес для пересылки")
+        raise ValueError("Укажите адрес получателя")
     if len(value) > 200:
-        raise ValueError("Адрес пересылки не длиннее 200 символов")
+        raise ValueError("Адрес получателя не длиннее 200 символов")
     if not FORWARD_EMAIL_RE.fullmatch(value):
-        raise ValueError("Некорректный адрес для пересылки")
+        raise ValueError("Некорректный адрес получателя")
     return value
 
 
@@ -142,7 +146,7 @@ def _validate_rule_id(rule_id: str) -> str:
 
 def _action_label(action: str, forward_to: str = "") -> str:
     label = ACTION_LABELS.get(action, action)
-    if action == "forward" and forward_to:
+    if action in ACTIONS_NEED_ADDRESS and forward_to:
         return f"{label} → {forward_to}"
     return label
 
@@ -155,7 +159,7 @@ def _storage_filter(rule: dict[str, Any]) -> dict[str, Any]:
         "action": rule["action"],
         "enabled": rule["enabled"],
     }
-    if rule["action"] == "forward" and rule.get("forward_to"):
+    if rule["action"] in ACTIONS_NEED_ADDRESS and rule.get("forward_to"):
         item["forward_to"] = rule["forward_to"]
     return item
 
@@ -287,10 +291,11 @@ def _build_sieve_block(filters: list[dict[str, Any]]) -> str:
     blocks: list[str] = []
     for rule in _enabled_rules(filters):
         normalized = _normalize_filter(rule)
-        # Пересылка только через Amavis: глобальный Sieve на стороне получателя
-        # иначе снова redirect+discard и письмо пропадает.
-        if normalized["action"] == "forward":
+        # Пересылка / доп. получатель только через Amavis (глобальный Sieve
+        # на ящике получателя иначе ломает доставку).
+        if normalized["action"] in ACTIONS_NEED_ADDRESS:
             continue
+
         conditions: list[str] = []
         for pattern in _case_permutations(normalized["pattern"]):
             escaped = _sieve_escape(pattern)
@@ -841,8 +846,9 @@ def list_content_filters() -> dict[str, Any]:
         "Правила работают через хук Amavis (включая письма между ящиками на сервере).",
         "Для внутренней почты дополнительно применяется глобальный Sieve.",
         "Действия: «Карантин» — в карантин спама; «Удалить» — отбросить без доставки; "
-        "«Переслать» — доставить на указанный адрес вместо исходных получателей "
-        "(пересылка выполняется хуком Amavis; нужна проверка внутренней почты).",
+        "«Переслать» — только на указанный адрес (вместо исходных получателей); "
+        "«Добавить получателя» — и исходным, и на указанный адрес "
+        "(оба варианта через Amavis; нужна проверка внутренней почты).",
         "Поиск без учёта регистра, по вхождению указанного текста.",
         "Правила с действием «Карантин» дублируются в SpamAssassin для внешней почты.",
         "Отправители из белого списка могут обходить проверку SpamAssassin.",
@@ -916,7 +922,7 @@ def update_content_filter(
     if forward_to is not None:
         current["forward_to"] = forward_to
     next_action = _validate_action(str(current.get("action", "quarantine")))
-    if next_action != "forward":
+    if next_action not in ACTIONS_NEED_ADDRESS:
         current.pop("forward_to", None)
     if enabled is not None:
         current["enabled"] = bool(enabled)

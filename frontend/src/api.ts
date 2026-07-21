@@ -93,7 +93,7 @@ export type ContentFilter = {
   field: 'subject' | 'body' | 'from'
   field_label: string
   pattern: string
-  action: 'quarantine' | 'delete' | 'forward'
+  action: 'quarantine' | 'delete' | 'forward' | 'add_recipient'
   action_label: string
   forward_to?: string
   enabled: boolean
@@ -417,7 +417,7 @@ export const api = {
   createContentFilter: (body: {
     field: 'subject' | 'body' | 'from'
     pattern: string
-    action?: 'quarantine' | 'delete' | 'forward'
+    action?: 'quarantine' | 'delete' | 'forward' | 'add_recipient'
     forward_to?: string | null
     enabled?: boolean
   }) =>
@@ -430,7 +430,7 @@ export const api = {
     body: {
       field?: 'subject' | 'body' | 'from'
       pattern?: string
-      action?: 'quarantine' | 'delete' | 'forward'
+      action?: 'quarantine' | 'delete' | 'forward' | 'add_recipient'
       forward_to?: string | null
       enabled?: boolean
     },

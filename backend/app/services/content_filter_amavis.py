@@ -288,19 +288,53 @@ sub Amavis::Custom::before_send {{
     Amavis::Util::do_log(0, "MAILPANEL: before_send delete (%s)", $field);
     return;
   }}
-  if ($action eq 'forward') {{
+  if ($action eq 'forward' || $action eq 'add_recipient') {{
     if (!defined $forward_to || !length $forward_to) {{
-      Amavis::Util::do_log(0, "MAILPANEL: before_send forward missing address (%s)", $field);
+      Amavis::Util::do_log(0, "MAILPANEL: before_send %s missing address (%s)", $action, $field);
       return;
     }}
+    my $already = 0;
     for my $r (@{{$msginfo->per_recip_data}}) {{
       my $curr = eval {{ $r->recip_addr }} || '';
-      next if defined $curr && length $curr && lc($curr) eq lc($forward_to);
-      eval {{ $r->recip_addr_modified($forward_to); 1 }}
-        or Amavis::Util::do_log(0, "MAILPANEL: recip_addr_modified failed: %s", $@);
+      if (defined $curr && length $curr && lc($curr) eq lc($forward_to)) {{
+        $already = 1;
+        last;
+      }}
+    }}
+    if ($action eq 'forward') {{
+      for my $r (@{{$msginfo->per_recip_data}}) {{
+        my $curr = eval {{ $r->recip_addr }} || '';
+        next if defined $curr && length $curr && lc($curr) eq lc($forward_to);
+        eval {{ $r->recip_addr_modified($forward_to); 1 }}
+          or Amavis::Util::do_log(0, "MAILPANEL: recip_addr_modified failed: %s", $@);
+      }}
+      $self->{{mailpanel_done}} = 1;
+      Amavis::Util::do_log(0, "MAILPANEL: before_send forward (%s) -> %s", $field, $forward_to);
+      return;
+    }}
+    # add_recipient: keep original recipients, append extra address
+    if (!$already) {{
+      my $proto = $msginfo->per_recip_data->[0];
+      my $extra;
+      eval {{
+        $extra = Amavis::In::Message::PerRecip->new;
+        $extra->recip_addr($forward_to);
+        my $smtp_addr = $forward_to;
+        $smtp_addr = '<' . $forward_to . '>' unless $smtp_addr =~ /^</;
+        $extra->recip_addr_smtp($smtp_addr);
+        if ($proto) {{
+          my $dm = eval {{ $proto->delivery_method }};
+          $extra->delivery_method($dm) if defined $dm && length $dm;
+          my $local = eval {{ $proto->recip_is_local }};
+          $extra->recip_is_local($local) if defined $local;
+        }}
+        $extra->recip_destiny(1);  # D_PASS
+        push @{{$msginfo->per_recip_data}}, $extra;
+        1;
+      }} or Amavis::Util::do_log(0, "MAILPANEL: add_recipient failed: %s", $@);
     }}
     $self->{{mailpanel_done}} = 1;
-    Amavis::Util::do_log(0, "MAILPANEL: before_send forward (%s) -> %s", $field, $forward_to);
+    Amavis::Util::do_log(0, "MAILPANEL: before_send add_recipient (%s) + %s", $field, $forward_to);
     return;
   }}
   my $method = $main::spam_quarantine_method;

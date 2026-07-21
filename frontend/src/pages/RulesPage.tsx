@@ -13,10 +13,15 @@ const ACTION_OPTIONS = [
   { value: 'quarantine', label: 'Карантин' },
   { value: 'delete', label: 'Удалить' },
   { value: 'forward', label: 'Переслать' },
+  { value: 'add_recipient', label: 'Добавить получателя' },
 ] as const
 
 type FieldValue = (typeof FIELD_OPTIONS)[number]['value']
 type ActionValue = (typeof ACTION_OPTIONS)[number]['value']
+
+function needsAddress(action: ActionValue): boolean {
+  return action === 'forward' || action === 'add_recipient'
+}
 
 export default function RulesPage() {
   const [data, setData] = useState<ContentFiltersData | null>(null)
@@ -41,8 +46,8 @@ export default function RulesPage() {
       notify.error('Укажите текст для поиска')
       return
     }
-    if (action === 'forward' && !forwardTo.trim()) {
-      notify.error('Укажите адрес для пересылки')
+    if (needsAddress(action) && !forwardTo.trim()) {
+      notify.error('Укажите адрес получателя')
       return
     }
     try {
@@ -50,11 +55,11 @@ export default function RulesPage() {
         field,
         pattern: text,
         action,
-        forward_to: action === 'forward' ? forwardTo.trim() : null,
+        forward_to: needsAddress(action) ? forwardTo.trim() : null,
         enabled: true,
       })
       setPattern('')
-      if (action === 'forward') setForwardTo('')
+      if (needsAddress(action)) setForwardTo('')
       notify.success('Правило добавлено')
       await load()
     } catch (e) {
@@ -108,8 +113,9 @@ export default function RulesPage() {
         <h3>Входящие фильтры</h3>
         <p className="muted">
           Если во входящем письме в теме, отправителе или тексте встречается указанная строка,
-          выполняется выбранное действие: карантин, удаление или пересылка на другой адрес
-          (например, все письма с темой «Директору» — на ящик директора).
+          выполняется выбранное действие: карантин, удаление, пересылка на другой адрес
+          или добавление получателя (письмо останется у исходного адресата и уйдёт ещё
+          на указанный ящик — например, копия директору).
           Поиск без учёта регистра, по вхождению подстроки.
           Для писем между ящиками на этом сервере нужна проверка внутренней почты в Amavis.
         </p>
@@ -144,7 +150,7 @@ export default function RulesPage() {
         )}
         {canWrite && (
           <div style={{ marginBottom: 16 }}>
-            <div className="form-row" style={{ marginBottom: action === 'forward' ? 10 : 0 }}>
+            <div className="form-row" style={{ marginBottom: needsAddress(action) ? 10 : 0 }}>
               <select value={field} onChange={(e) => setField(e.target.value as FieldValue)}>
                 {FIELD_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -162,11 +168,15 @@ export default function RulesPage() {
               </select>
               <button onClick={create}>Добавить правило</button>
             </div>
-            {action === 'forward' && (
+            {needsAddress(action) && (
               <div className="form-row">
                 <input
                   style={{ minWidth: 280 }}
-                  placeholder="Адрес пересылки, например director@example.ru"
+                  placeholder={
+                    action === 'add_recipient'
+                      ? 'Доп. адрес, например director@example.ru'
+                      : 'Адрес пересылки, например director@example.ru'
+                  }
                   value={forwardTo}
                   onChange={(e) => setForwardTo(e.target.value)}
                 />
