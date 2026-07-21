@@ -3,16 +3,23 @@ from __future__ import annotations
 import email
 import email.policy
 import re
+import shutil
 import socket
+import subprocess
 from datetime import datetime
 from email.header import decode_header, make_header
 from email.message import EmailMessage
+from pathlib import Path
 from typing import Any
 
 from app.config import get_config
 from app.database import amavisd_conn, execute, fetch_all, fetch_one
 
 MAIL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,16}$")
+AMAVIS_PDP_PORT_RE = re.compile(
+    r"\$interface_policy\{'(\d+)'\}\s*=\s*'AM\.PDP",
+    re.IGNORECASE,
+)
 
 CONTENT_LABELS = {
     "V": "Вирус",
@@ -261,19 +268,79 @@ def get_quarantine_body(mail_id: str, partition_tag: str = "") -> dict[str, Any]
     }
 
 
-def _amavis_release(mail_id: str, secret_id: str, partition_tag: str) -> list[str]:
+def _amavis_config_path() -> Path:
+    return Path(getattr(get_config().paths, "amavisd_config", "/etc/amavisd/amavisd.conf"))
+
+
+def _discover_release_ports() -> list[int]:
+    ports: list[int] = []
+    seen: set[int] = set()
+
+    def add(port: int) -> None:
+        if port > 0 and port not in seen:
+            seen.add(port)
+            ports.append(port)
+
     cfg = get_config()
-    host = cfg.amavisd.release_host
-    port = cfg.amavisd.release_port
+    add(cfg.amavisd.release_port)
+    path = _amavis_config_path()
+    if path.is_file():
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for match in AMAVIS_PDP_PORT_RE.finditer(text):
+            add(int(match.group(1)))
+    for port in (9998, 10026):
+        add(port)
+    return ports
+
+
+def _release_targets() -> list[tuple[str, int]]:
+    host = get_config().amavisd.release_host or "127.0.0.1"
+    return [(host, port) for port in _discover_release_ports()]
+
+
+def _build_release_payload(mail_id: str, secret_id: str, partition_tag: str) -> bytes:
     lines = [
         "request=release",
         f"mail_id={mail_id}",
-        f"secret_id={secret_id}",
         "quar_type=Q",
     ]
+    if secret_id:
+        lines.append(f"secret_id={secret_id}")
     if partition_tag:
         lines.append(f"partition_tag={partition_tag}")
-    payload = "\r\n".join(lines + ["", ""]).encode("ascii")
+    return ("\n".join(lines) + "\n\n").encode("ascii")
+
+
+def _release_response_ok(responses: list[str]) -> bool:
+    if not responses:
+        return False
+    joined = "\n".join(responses)
+    lowered = joined.lower()
+    if any(
+        token in lowered
+        for token in (
+            "does not exist",
+            "failure",
+            "failed",
+            "denied",
+            "not authorized",
+            "no such",
+            "can't open",
+        )
+    ):
+        if not any(line.startswith("250") for line in responses):
+            return False
+    if any(line.startswith("250") for line in responses):
+        return True
+    if "setreply=250" in lowered:
+        return True
+    return False
+
+
+def _amavis_release_tcp(
+    host: str, port: int, mail_id: str, secret_id: str, partition_tag: str
+) -> list[str]:
+    payload = _build_release_payload(mail_id, secret_id, partition_tag)
     with socket.create_connection((host, port), timeout=30) as sock:
         sock.sendall(payload)
         sock.shutdown(socket.SHUT_WR)
@@ -287,13 +354,75 @@ def _amavis_release(mail_id: str, secret_id: str, partition_tag: str) -> list[st
     return [line.strip() for line in response.splitlines() if line.strip()]
 
 
+def _amavis_release_cli(mail_id: str, secret_id: str, partition_tag: str) -> list[str]:
+    candidates = [
+        "/usr/sbin/amavisd-release",
+        "/bin/amavisd-release",
+        shutil.which("amavisd-release") or "",
+    ]
+    cfg = get_config()
+    host = cfg.amavisd.release_host or "127.0.0.1"
+    port = cfg.amavisd.release_port
+    config_path = _amavis_config_path()
+    for command in candidates:
+        if not command or not Path(command).is_file():
+            continue
+        args = [command, "-h", host, "-p", str(port)]
+        if config_path.is_file():
+            args.extend(["-c", str(config_path)])
+        args.extend([mail_id, secret_id])
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        output = "\n".join(
+            part.strip()
+            for part in (result.stdout or "", result.stderr or "")
+            if part and part.strip()
+        )
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if result.returncode == 0 or _release_response_ok(lines):
+            return lines or [output]
+    return []
+
+
+def _amavis_release(mail_id: str, secret_id: str, partition_tag: str) -> list[str]:
+    errors: list[str] = []
+    for host, port in _release_targets():
+        try:
+            responses = _amavis_release_tcp(host, port, mail_id, secret_id, partition_tag)
+            if _release_response_ok(responses):
+                return responses
+            if responses:
+                errors.append(f"{host}:{port} → {'; '.join(responses)}")
+            else:
+                errors.append(f"{host}:{port} → пустой ответ Amavis")
+        except OSError as exc:
+            errors.append(f"{host}:{port} → {exc}")
+
+    cli_responses = _amavis_release_cli(mail_id, secret_id, partition_tag)
+    if _release_response_ok(cli_responses):
+        return cli_responses
+    if cli_responses:
+        errors.append(f"amavisd-release → {'; '.join(cli_responses)}")
+
+    ports = ", ".join(str(port) for _, port in _release_targets())
+    hint = (
+        "Проверьте в amavisd.conf: "
+        "$inet_socket_port должен включать 9998; "
+        "$interface_policy{'9998'} = 'AM.PDP-INET'; "
+        "и policy_bank для AM.PDP с inet_acl 127.0.0.1."
+    )
+    detail = "; ".join(errors) or f"нет ответа на портах {ports}"
+    raise QuarantineError(f"Не удалось освободить письмо: {detail}. {hint}")
+
+
 def release_quarantine(mail_id: str, partition_tag: str = "") -> dict[str, Any]:
     item = get_quarantine_item(mail_id, partition_tag)
     responses = _amavis_release(item["mail_id"], item["secret_id"], item["partition_tag"])
-    success = any(line.startswith("250") for line in responses)
-    if not success:
-        detail = "; ".join(responses) or "Amavis не ответил"
-        raise QuarantineError(f"Не удалось освободить письмо: {detail}")
     delete_quarantine(mail_id, item["partition_tag"])
     return {"ok": True, "responses": responses}
 
