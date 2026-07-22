@@ -29,6 +29,8 @@ export default function RulesPage() {
   const [action, setAction] = useState<ActionValue>('quarantine')
   const [forwardTo, setForwardTo] = useState('')
   const [pattern, setPattern] = useState('')
+  const [busyRuleId, setBusyRuleId] = useState<string | null>(null)
+  const [busyAction, setBusyAction] = useState<'toggle' | 'delete' | 'create' | 'reapply' | null>(null)
   const role = getUser()?.role
   const canWrite = role === 'superadmin' || role === 'admin'
 
@@ -40,6 +42,16 @@ export default function RulesPage() {
     load().catch((e) => notify.error(errorMessage(e)))
   }, [])
 
+  function patchRule(ruleId: string, patch: Partial<ContentFilter>) {
+    setData((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        items: prev.items.map((item) => (item.id === ruleId ? { ...item, ...patch } : item)),
+      }
+    })
+  }
+
   async function create() {
     const text = pattern.trim()
     if (!text) {
@@ -50,7 +62,9 @@ export default function RulesPage() {
       notify.error('Укажите адрес получателя')
       return
     }
+    setBusyAction('create')
     try {
+      notify.info('Применяется на сервере (Amavis)…')
       await api.createContentFilter({
         field,
         pattern: text,
@@ -64,31 +78,53 @@ export default function RulesPage() {
       await load()
     } catch (e) {
       notify.error(errorMessage(e))
+    } finally {
+      setBusyAction(null)
     }
   }
 
   async function toggleRule(rule: ContentFilter) {
+    if (busyRuleId || busyAction) return
+    const nextEnabled = !rule.enabled
+    setBusyRuleId(rule.id)
+    setBusyAction('toggle')
+    patchRule(rule.id, { enabled: nextEnabled })
+    notify.info(nextEnabled ? 'Включаем правило…' : 'Отключаем правило…')
     try {
-      await api.updateContentFilter(rule.id, { enabled: !rule.enabled })
-      notify.success(rule.enabled ? 'Правило отключено' : 'Правило включено')
+      await api.updateContentFilter(rule.id, { enabled: nextEnabled })
+      notify.success(nextEnabled ? 'Правило включено' : 'Правило отключено')
       await load()
     } catch (e) {
+      patchRule(rule.id, { enabled: rule.enabled })
       notify.error(errorMessage(e))
+    } finally {
+      setBusyRuleId(null)
+      setBusyAction(null)
     }
   }
 
   async function removeRule(rule: ContentFilter) {
+    if (busyRuleId || busyAction) return
     if (!confirm(`Удалить правило «${rule.pattern}»?`)) return
+    setBusyRuleId(rule.id)
+    setBusyAction('delete')
+    notify.info('Удаляем правило…')
     try {
       await api.deleteContentFilter(rule.id)
       notify.success('Правило удалено')
       await load()
     } catch (e) {
       notify.error(errorMessage(e))
+    } finally {
+      setBusyRuleId(null)
+      setBusyAction(null)
     }
   }
 
   async function reapply() {
+    if (busyAction) return
+    setBusyAction('reapply')
+    notify.info('Применяется на сервере (Amavis)…')
     try {
       const res = await api.reapplyContentFilters()
       if (res.warnings?.length) {
@@ -99,6 +135,8 @@ export default function RulesPage() {
       await load()
     } catch (e) {
       notify.error(errorMessage(e))
+    } finally {
+      setBusyAction(null)
     }
   }
 
@@ -142,8 +180,13 @@ export default function RulesPage() {
               {diagnostics.local_cf_exists ? ` (${diagnostics.local_cf})` : ''}
             </div>
             {canWrite && (
-              <button className="secondary" style={{ marginTop: 10 }} onClick={reapply}>
-                Применить правила заново
+              <button
+                className="secondary"
+                style={{ marginTop: 10 }}
+                onClick={reapply}
+                disabled={busyAction !== null}
+              >
+                {busyAction === 'reapply' ? 'Применяется…' : 'Применить правила заново'}
               </button>
             )}
           </div>
@@ -166,7 +209,9 @@ export default function RulesPage() {
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
               </select>
-              <button onClick={create}>Добавить правило</button>
+              <button onClick={create} disabled={busyAction !== null}>
+                {busyAction === 'create' ? 'Добавление…' : 'Добавить правило'}
+              </button>
             </div>
             {needsAddress(action) && (
               <div className="form-row">
@@ -212,10 +257,22 @@ export default function RulesPage() {
                 </td>
                 {canWrite && (
                   <td className="actions">
-                    <button className="secondary" onClick={() => toggleRule(rule)}>
-                      {rule.enabled ? 'Отключить' : 'Включить'}
+                    <button
+                      className="secondary"
+                      disabled={busyAction !== null}
+                      onClick={() => toggleRule(rule)}
+                    >
+                      {busyRuleId === rule.id && busyAction === 'toggle'
+                        ? (rule.enabled ? 'Включаем…' : 'Отключаем…')
+                        : (rule.enabled ? 'Отключить' : 'Включить')}
                     </button>
-                    <button className="danger" onClick={() => removeRule(rule)}>Удалить</button>
+                    <button
+                      className="danger"
+                      disabled={busyAction !== null}
+                      onClick={() => removeRule(rule)}
+                    >
+                      {busyRuleId === rule.id && busyAction === 'delete' ? 'Удаление…' : 'Удалить'}
+                    </button>
                   </td>
                 )}
               </tr>
