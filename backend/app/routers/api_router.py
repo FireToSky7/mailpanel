@@ -7,9 +7,10 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.auth import PanelUser, Role, client_ip, get_current_user, require_permission, write_audit
 from app.config import get_config, role_has_permission
-from app.services import amavis_policy, content_filter_ops, group_ops, iredapd, log_reader, mail_ops
+from app.services import amavis_policy, content_filter_ops, fail2ban_ops, group_ops, iredapd, log_reader, mail_ops
 from app.services.amavis_policy import AmavisPolicyError
 from app.services.content_filter_ops import ContentFilterError
+from app.services.fail2ban_ops import Fail2banError
 from app.services.iredapd import IredapdError
 from app.services import iredapd, mail_journal_search, postfix_diagnostics, postfix_queue, quarantine_ops
 from app.services.greylisting_ops import get_greylisting_overview, greylisting_stats
@@ -197,6 +198,13 @@ class PanelUserPassword(BaseModel):
 class Fail2banUnban(BaseModel):
     jail: str
     ip: str
+
+
+class Fail2banSettingsUpdate(BaseModel):
+    bantime: int
+    maxretry: int
+    findtime: int = 600
+    disable_mailbox_on_ban: bool = False
 
 
 class QueueFlushRequest(BaseModel):
@@ -1087,13 +1095,53 @@ def restart_service(name: str, request: Request, user: PanelUser = Depends(requi
 
 @router.get("/fail2ban", dependencies=[Depends(require_permission("services.read"))])
 def get_fail2ban():
-    return mail_ops.fail2ban_status()
+    return {
+        "bans": fail2ban_ops.fail2ban_banned_table(),
+        "jails": fail2ban_ops.fail2ban_status(),
+        "settings": fail2ban_ops.read_settings(),
+    }
+
+
+@router.get("/fail2ban/settings", dependencies=[Depends(require_permission("services.read"))])
+def get_fail2ban_settings():
+    return fail2ban_ops.read_settings()
+
+
+@router.put("/fail2ban/settings", dependencies=[Depends(require_permission("services.restart"))])
+def put_fail2ban_settings(
+    payload: Fail2banSettingsUpdate,
+    request: Request,
+    user: PanelUser = Depends(require_permission("services.restart")),
+):
+    try:
+        result = fail2ban_ops.write_settings(
+            bantime=payload.bantime,
+            maxretry=payload.maxretry,
+            findtime=payload.findtime,
+            disable_mailbox_on_ban=payload.disable_mailbox_on_ban,
+        )
+        _audit(
+            user,
+            request,
+            "update",
+            "fail2ban_settings",
+            f"bantime={payload.bantime};maxretry={payload.maxretry};"
+            f"findtime={payload.findtime};disable_mailbox={payload.disable_mailbox_on_ban}",
+        )
+        return result
+    except Fail2banError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.post("/fail2ban/unban", dependencies=[Depends(require_permission("services.restart"))])
-def post_unban(payload: Fail2banUnban, user: PanelUser = Depends(require_permission("services.restart"))):
+def post_unban(payload: Fail2banUnban, request: Request, user: PanelUser = Depends(require_permission("services.restart"))):
     try:
-        mail_ops.fail2ban_unban(payload.jail, payload.ip)
+        fail2ban_ops.fail2ban_unban(payload.jail, payload.ip)
+        _audit(user, request, "unban", "fail2ban", f"{payload.jail}:{payload.ip}")
+    except Fail2banError as exc:
+        raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True}

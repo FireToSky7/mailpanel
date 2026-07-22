@@ -39,6 +39,8 @@ paths:
   antispam_policy_file: "/etc/mailpanel/antispam_policy.yaml"
   wblist_comments_file: "/etc/mailpanel/wblist_comments.yaml"
   content_filters_file: "/etc/mailpanel/content_filters.yaml"
+  fail2ban_policy_file: "/etc/mailpanel/fail2ban_policy.yaml"
+  fail2ban_disabled_log_file: "/etc/mailpanel/fail2ban_disabled_mailboxes.yaml"
   spamassassin_filters_file: "/etc/mail/spamassassin/mailpanel_filters.cf"
   amavis_custom_filters_file: "/etc/mailpanel/amavis_custom_filters.conf"
   amavis_late_policy_file: "/etc/mailpanel/amavis_late_policy.inc"

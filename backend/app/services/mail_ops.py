@@ -583,30 +583,15 @@ def restart_service(name: str) -> dict[str, str]:
 
 
 def fail2ban_status() -> list[dict[str, Any]]:
-    jails: list[dict[str, Any]] = []
-    result = subprocess.run(["fail2ban-client", "status"], capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        return jails
-    jail_names = []
-    for line in result.stdout.splitlines():
-        if "Jail list:" in line:
-            tail = line.split("Jail list:")[-1].strip()
-            jail_names = [j.strip() for j in tail.split(",") if j.strip()]
-    for jail in jail_names:
-        detail = subprocess.run(
-            ["fail2ban-client", "status", jail], capture_output=True, text=True, check=False
-        )
-        banned = []
-        for line in detail.stdout.splitlines():
-            if "Banned IP list:" in line:
-                tail = line.split("Banned IP list:")[-1].strip()
-                banned = [ip.strip() for ip in tail.split() if ip.strip()]
-        jails.append({"jail": jail, "banned_ips": banned})
-    return jails
+    from app.services import fail2ban_ops
+
+    return fail2ban_ops.fail2ban_status()
 
 
 def fail2ban_unban(jail: str, ip: str) -> None:
-    subprocess.run(["fail2ban-client", "set", jail, "unbanip", ip], check=True)
+    from app.services import fail2ban_ops
+
+    fail2ban_ops.fail2ban_unban(jail, ip)
 
 
 def tail_log_file(path: str, lines: int = 200) -> list[str]:

@@ -60,6 +60,35 @@ export type Fail2banJail = {
   banned_ips: string[]
 }
 
+export type Fail2banBanRow = {
+  ip: string
+  jail: string
+}
+
+export type Fail2banDisabledMailbox = {
+  mailbox: string
+  ip: string
+  jail: string
+  at: string
+}
+
+export type Fail2banSettings = {
+  bantime: number
+  maxretry: number
+  findtime: number
+  disable_mailbox_on_ban: boolean
+  jails: string[]
+  sample_jail: string
+  recent_disabled: Fail2banDisabledMailbox[]
+  notes: string[]
+}
+
+export type Fail2banData = {
+  bans: Fail2banBanRow[]
+  jails: Fail2banJail[]
+  settings: Fail2banSettings
+}
+
 export type PanelUser = {
   id: number
   username: string
@@ -522,7 +551,18 @@ export const api = {
     ),
   services: () => request<ServiceStatus[]>('/api/services'),
   restartService: (name: string) => request<ServiceStatus>(`/api/services/${name}/restart`, { method: 'POST' }),
-  fail2ban: () => request<Fail2banJail[]>('/api/fail2ban'),
+  fail2ban: () => request<Fail2banData>('/api/fail2ban'),
+  fail2banSettings: () => request<Fail2banSettings>('/api/fail2ban/settings'),
+  updateFail2banSettings: (body: {
+    bantime: number
+    maxretry: number
+    findtime: number
+    disable_mailbox_on_ban: boolean
+  }) =>
+    request<Fail2banSettings>('/api/fail2ban/settings', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
   unban: (jail: string, ip: string) =>
     request<{ ok: boolean }>('/api/fail2ban/unban', { method: 'POST', body: JSON.stringify({ jail, ip }) }),
   panelUsers: () => request<PanelUser[]>('/api/panel-users'),

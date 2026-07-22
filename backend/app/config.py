@@ -81,6 +81,8 @@ class PathsConfig(BaseModel):
     amavis_custom_filters_file: str = "/etc/mailpanel/amavis_custom_filters.conf"
     amavis_late_policy_file: str = "/etc/mailpanel/amavis_late_policy.inc"
     dovecot_global_sieve: str = "/var/vmail/sieve/dovecot.sieve"
+    fail2ban_policy_file: str = "/etc/mailpanel/fail2ban_policy.yaml"
+    fail2ban_disabled_log_file: str = "/etc/mailpanel/fail2ban_disabled_mailboxes.yaml"
 
 
 class LogCollectorConfig(BaseModel):
