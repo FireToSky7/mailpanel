@@ -229,6 +229,18 @@ sub match_mail {{
   return ('', 0, '', '', '');
 }}
 
+sub _mailpanel_has_virus {{
+  my ($msginfo) = @_;
+  my $parts = eval {{ $msginfo->parts }};
+  return 0 unless $parts && ref($parts) eq 'ARRAY';
+  for my $part (@$parts) {{
+    next unless $part;
+    my $name = eval {{ $part->virus_name }};
+    return 1 if defined $name && length $name;
+  }}
+  return 0;
+}}
+
 package main;
 
 sub Amavis::Custom::new {{
@@ -245,6 +257,10 @@ sub Amavis::Custom::new {{
 
 sub Amavis::Custom::checks {{
   my ($self, $conn, $msginfo) = @_;
+  if (MailPanel::Filters::_mailpanel_has_virus($msginfo)) {{
+    Amavis::Util::do_log(0, "MAILPANEL: skip content filter (virus already detected)");
+    return;
+  }}
   my ($field, $matched, $action, $forward_to, $rule_id) = MailPanel::Filters::match_mail($msginfo);
   return unless $matched;
   $self->{{mailpanel_match}} = $field;
@@ -267,6 +283,10 @@ sub Amavis::Custom::checks {{
 sub Amavis::Custom::before_send {{
   my ($self, $conn, $msginfo) = @_;
   return if $self->{{mailpanel_done}};
+  if (MailPanel::Filters::_mailpanel_has_virus($msginfo)) {{
+    Amavis::Util::do_log(0, "MAILPANEL: skip before_send (virus already detected)");
+    return;
+  }}
   my $field = $self->{{mailpanel_match}};
   my $action = $self->{{mailpanel_action}};
   my $forward_to = $self->{{mailpanel_forward_to}} || '';

@@ -83,10 +83,11 @@ def mail_delivery_diagnostics() -> dict[str, Any]:
         hints.append(f"Глобальный content_filter: {content_filter}")
 
     clamd_socket = Path("/var/run/clamd.amavisd/clamd.socket")
-    if not clamd_socket.exists():
+    drweb_socket = Path("/var/run/drweb.clamd")
+    if not clamd_socket.exists() and not drweb_socket.exists():
         hints.append(
-            "ClamAV не установлен — Amavis работает без антивируса (это нормально для вашей системы). "
-            "Предупреждения AV: ALL VIRUS SCANNERS FAILED в логах можно игнорировать."
+            "Антивирусный сканер (ClamAV/Dr.Web ClamD) не обнаружен — Amavis работает без проверки на вирусы. "
+            "Предупреждения AV: ALL VIRUS SCANNERS FAILED в логах можно игнорировать, если сканер не установлен."
         )
 
     amavis_active = _run(["systemctl", "is-active", "amavisd"])

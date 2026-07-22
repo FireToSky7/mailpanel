@@ -75,6 +75,40 @@ def amavis_include_path() -> Path:
     return antispam_policy_path().parent / "amavis_mailpanel.inc"
 
 
+CLAMD_SOCKET_PATHS = (
+    Path("/var/run/clamd.amavisd/clamd.socket"),
+    Path("/var/run/drweb.clamd"),
+    Path("/var/run/clamav/clamd.ctl"),
+)
+
+
+def av_scanner_socket_path() -> Path | None:
+    for path in CLAMD_SOCKET_PATHS:
+        if path.exists():
+            return path
+    return None
+
+
+def av_scanner_available() -> bool:
+    """True when a ClamD-compatible socket exists (ClamAV or Dr.Web ClamD)."""
+    socket_path = av_scanner_socket_path()
+    if socket_path is None:
+        return False
+    try:
+        result = subprocess.run(
+            ["nc", "-U", str(socket_path)],
+            input=b"PING\n",
+            capture_output=True,
+            timeout=3,
+            check=False,
+        )
+        if b"PONG" in (result.stdout or b""):
+            return True
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    return socket_path.exists()
+
+
 def _normalize_extension(value: str) -> str:
     value = value.strip().lower().lstrip(".")
     if not EXTENSION_RE.fullmatch(value):
@@ -243,10 +277,25 @@ def _build_include_file(
 ) -> str:
     joined = "|".join(sorted({_normalize_extension(ext) for ext in extensions}))
     scan_flag = 1 if scan_internal_mail else 0
-    virus_bypass_block = ""
+    content_filter_block = ""
     if content_filters_active:
-        virus_bypass_block = """
-# ClamAV is not installed; AV failure otherwise short-circuits content filter hooks.
+        if av_scanner_available():
+            content_filter_block = """
+# Content filter rules; AV scanner available — virus checks stay enabled (run before hooks).
+@bypass_spam_checks_maps = (0);
+$bypass_spam_checks = 0;
+foreach my $bank (keys %policy_bank) {
+  next unless ref($policy_bank{$bank}) eq 'HASH';
+  $policy_bank{$bank}{'bypass_spam_checks_maps'} = [0];
+}
+$policy_bank{'MAILPANEL_CONTENT'} = {
+  final_spam_destiny => D_QUARANTINE,
+  final_banned_destiny => D_QUARANTINE,
+};
+"""
+        else:
+            content_filter_block = """
+# No AV scanner; disable virus checks so content filter hooks are not short-circuited.
 @bypass_virus_checks_maps = (1);
 @bypass_spam_checks_maps = (0);
 $bypass_spam_checks = 0;
@@ -270,7 +319,7 @@ foreach my $bank (keys %policy_bank) {{
   next unless ref($policy_bank{{$bank}}) eq 'HASH';
   $policy_bank{{$bank}}{{'bypass_banned_checks_maps'}} = [0];
 }}
-{virus_bypass_block}
+{content_filter_block}
 if ($mailpanel_scan_internal) {{
   $interface_policy{{'127.0.0.1'}} = 'ORIGINATING';
   $interface_policy{{'::1'}} = 'ORIGINATING';
@@ -425,12 +474,20 @@ def read_mail_policy() -> dict[str, Any]:
     return {
         "scan_internal_mail": policy["scan_internal_mail"],
         "content_filters_active": policy["content_filters_active"],
+        "av_scanner_available": av_scanner_available(),
+        "av_scanner_socket": str(av_scanner_socket_path() or ""),
         "include_present": "amavis_mailpanel.inc" in content,
         "bypass_banned_active": _detect_bypass_state(content),
         "notes": [
             "Проверка вложений принудительно включена для всех политик Amavis (обход bypass_banned_checks).",
             "Проверка внутренней почты дополнительно включает антиспам для localhost и политики ORIGINATING.",
-            "При активных правилах контента антивирус отключается (ClamAV не установлен), чтобы хук Amavis успевал сработать.",
+            (
+                "При активных правилах контента антивирус остаётся включённым (Dr.Web/ClamAV доступен); "
+                "правила срабатывают после проверки на вирусы."
+                if av_scanner_available()
+                else "При активных правилах контента антивирус отключается (сканер недоступен), "
+                "иначе письма проходят как UNCHECKED без проверки контента."
+            ),
             "Письма через Roundcube (порт 587 с AUTH) обычно уже проходят через Amavis.",
             "Прямая локальная доставка с 127.0.0.1 без content_filter может обходить фильтр — это ограничение Postfix.",
         ],

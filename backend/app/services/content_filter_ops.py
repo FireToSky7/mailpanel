@@ -693,10 +693,15 @@ def _sync_amavis_policy(filters: list[dict[str, Any]]) -> list[str]:
             )
         amavis_policy.set_content_filters_active(active)
         if active:
-            warnings.append(
-                "Антивирус Amavis отключён для работы правил (ClamAV не установлен, "
-                "иначе письма проходят как UNCHECKED без проверки контента)."
-            )
+            if amavis_policy.av_scanner_available():
+                warnings.append(
+                    "Антивирус остаётся включённым: правила контента срабатывают после проверки на вирусы."
+                )
+            else:
+                warnings.append(
+                    "Антивирус Amavis отключён для работы правил (сканер недоступен, "
+                    "иначе письма проходят как UNCHECKED без проверки контента)."
+                )
     except Exception as exc:
         warnings.append(f"Не удалось обновить политику Amavis: {exc}")
     return warnings
@@ -739,6 +744,13 @@ def _diagnostics(filters: list[dict[str, Any]]) -> dict[str, Any]:
     except Exception:
         scan_internal_mail = False
     subject_patterns, from_patterns, body_patterns = _count_patterns_in_custom_file(custom_path)
+    av_available = False
+    try:
+        from app.services import amavis_policy
+
+        av_available = bool(amavis_policy.av_scanner_available())
+    except Exception:
+        av_available = False
     return {
         "local_cf": str(local_cf),
         "local_cf_exists": local_cf.is_file(),
@@ -757,6 +769,7 @@ def _diagnostics(filters: list[dict[str, Any]]) -> dict[str, Any]:
             subject_patterns or from_patterns or body_patterns
         )
         and "@av_scanners = ();" in include_content,
+        "av_scanner_available": av_available,
         "amavis_include_file": str(include_path) if include_path else "",
         "active_rules": len(_enabled_rules(filters)),
         "scan_internal_mail": scan_internal_mail,
