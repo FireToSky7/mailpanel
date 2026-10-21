@@ -15,7 +15,15 @@ from app.services.content_filter_ops import ContentFilterError
 from app.services.fail2ban_ops import Fail2banError
 from app.services.iredapd import IredapdError
 from app.services import iredapd, postfix_diagnostics, postfix_queue, quarantine_ops
-from app.services.greylisting_ops import get_greylisting_overview, greylisting_stats
+from app.services.greylisting_ops import (
+    add_allowed_ip,
+    add_banned_ip,
+    get_greylisting_overview,
+    greylisting_stats,
+    remove_allowed_ip,
+    remove_banned_ip,
+    update_greylisting_timing,
+)
 from app.services.postfix_queue import PostfixQueueError
 from app.services.quarantine_ops import QuarantineError
 from app.validators import normalize_email, validate_mailbox_password
@@ -160,6 +168,20 @@ class GreylistRequest(BaseModel):
 
 class GreylistDomainRequest(BaseModel):
     domain: str
+
+
+class GreylistTimingUpdate(BaseModel):
+    training_mode: bool | None = None
+    rejection_message: str | None = Field(default=None, max_length=200)
+    block_expire_minutes: int | None = Field(default=None, ge=1, le=1440)
+    auth_triplet_expire_days: int | None = Field(default=None, ge=1, le=365)
+    unauth_triplet_expire_days: int | None = Field(default=None, ge=1, le=90)
+    bypass_spf: bool | None = None
+
+
+class GreylistIpRequest(BaseModel):
+    ip: str = Field(min_length=3, max_length=80)
+    comment: str = Field(default="", max_length=400)
 
 
 class SpamUpdate(BaseModel):
@@ -711,6 +733,78 @@ def grey_sync_spf(
     except iredapd.IredapdError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True, "message": message}
+
+
+@router.put("/greylisting/timing", dependencies=[Depends(require_permission("greylisting.write"))])
+def grey_update_timing(
+    payload: GreylistTimingUpdate,
+    request: Request,
+    user: PanelUser = Depends(require_permission("greylisting.write")),
+):
+    try:
+        timing = update_greylisting_timing(payload.model_dump(exclude_none=True))
+        _audit(user, request, "timing_update", "greylisting", timing.get("settings_file", ""))
+        return {"ok": True, "timing": timing}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
+@router.post("/greylisting/allowed-ips", dependencies=[Depends(require_permission("greylisting.write"))])
+def grey_add_allowed_ip(
+    payload: GreylistIpRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("greylisting.write")),
+):
+    try:
+        add_allowed_ip(payload.ip)
+        _audit(user, request, "allowed_ip_add", "greylisting", payload.ip.strip())
+        return {"ok": True, "overview": get_greylisting_overview()}
+    except (ValueError, iredapd.IredapdError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/greylisting/allowed-ips/remove", dependencies=[Depends(require_permission("greylisting.write"))])
+def grey_remove_allowed_ip(
+    payload: GreylistIpRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("greylisting.write")),
+):
+    try:
+        remove_allowed_ip(payload.ip)
+        _audit(user, request, "allowed_ip_remove", "greylisting", payload.ip.strip())
+        return {"ok": True, "overview": get_greylisting_overview()}
+    except (ValueError, RuntimeError, iredapd.IredapdError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/greylisting/banned-ips", dependencies=[Depends(require_permission("greylisting.write"))])
+def grey_add_banned_ip(
+    payload: GreylistIpRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("greylisting.write")),
+):
+    try:
+        add_banned_ip(payload.ip, payload.comment)
+        _audit(user, request, "banned_ip_add", "greylisting", payload.ip.strip())
+        return {"ok": True, "overview": get_greylisting_overview()}
+    except (ValueError, iredapd.IredapdError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/greylisting/banned-ips/remove", dependencies=[Depends(require_permission("greylisting.write"))])
+def grey_remove_banned_ip(
+    payload: GreylistIpRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("greylisting.write")),
+):
+    try:
+        remove_banned_ip(payload.ip)
+        _audit(user, request, "banned_ip_remove", "greylisting", payload.ip.strip())
+        return {"ok": True, "overview": get_greylisting_overview()}
+    except (ValueError, iredapd.IredapdError) as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/spam", dependencies=[Depends(require_permission("antispam.read"))])

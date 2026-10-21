@@ -1,14 +1,30 @@
 import { useEffect, useState } from 'react'
-import { api, getUser, type GreylistingData } from '../api'
+import { api, getUser, type GreylistingData, type GreylistingTiming } from '../api'
 import EntryList from '../components/EntryList'
 import { errorMessage } from '../errors'
 import { notify } from '../notify'
+
+function emptyTiming(): GreylistingTiming {
+  return {
+    training_mode: false,
+    rejection_message: '',
+    block_expire_minutes: 15,
+    auth_triplet_expire_days: 30,
+    unauth_triplet_expire_days: 2,
+    bypass_spf: true,
+    settings_file: '',
+  }
+}
 
 export default function GreylistingPage() {
   const [grey, setGrey] = useState<GreylistingData | null>(null)
   const [greyToAddr, setGreyToAddr] = useState('')
   const [greyFromAddr, setGreyFromAddr] = useState('')
   const [greyWhitelistDomain, setGreyWhitelistDomain] = useState('')
+  const [allowedIp, setAllowedIp] = useState('')
+  const [bannedIp, setBannedIp] = useState('')
+  const [bannedComment, setBannedComment] = useState('')
+  const [timingForm, setTimingForm] = useState<GreylistingTiming>(emptyTiming)
   const [greyBusy, setGreyBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const role = getUser()?.role
@@ -17,7 +33,9 @@ export default function GreylistingPage() {
   async function load() {
     setLoading(true)
     try {
-      setGrey(await api.greylisting())
+      const data = await api.greylisting()
+      setGrey(data)
+      if (data.timing) setTimingForm({ ...data.timing })
     } catch (e) {
       notify.error(errorMessage(e))
       setGrey(null)
@@ -30,10 +48,21 @@ export default function GreylistingPage() {
 
   async function reloadGreylisting() {
     try {
-      setGrey(await api.greylisting())
+      const data = await api.greylisting()
+      setGrey(data)
+      if (data.timing) setTimingForm({ ...data.timing })
     } catch (e) {
       notify.error(errorMessage(e))
     }
+  }
+
+  function applyOverview(overview?: GreylistingData) {
+    if (!overview) {
+      reloadGreylisting()
+      return
+    }
+    setGrey(overview)
+    if (overview.timing) setTimingForm({ ...overview.timing })
   }
 
   async function runGreyAction(action: () => Promise<unknown>, success: string) {
@@ -58,6 +87,27 @@ export default function GreylistingPage() {
     const text = value.trim()
     if (!text) throw new Error('Укажите домен')
     return text.startsWith('@') ? text : `@${text}`
+  }
+
+  async function saveTiming() {
+    setGreyBusy(true)
+    try {
+      const res = await api.greylistingUpdateTiming({
+        training_mode: timingForm.training_mode,
+        rejection_message: timingForm.rejection_message,
+        block_expire_minutes: Number(timingForm.block_expire_minutes),
+        auth_triplet_expire_days: Number(timingForm.auth_triplet_expire_days),
+        unauth_triplet_expire_days: Number(timingForm.unauth_triplet_expire_days),
+        bypass_spf: timingForm.bypass_spf,
+      })
+      setTimingForm({ ...res.timing })
+      notify.success('Тайминги сохранены, iRedAPD перезапущен')
+      await reloadGreylisting()
+    } catch (e) {
+      notify.error(errorMessage(e))
+    } finally {
+      setGreyBusy(false)
+    }
   }
 
   async function disableGreylisting() {
@@ -116,6 +166,71 @@ export default function GreylistingPage() {
     )
   }
 
+  async function addAllowed() {
+    if (!allowedIp.trim()) {
+      notify.error('Укажите IP или CIDR')
+      return
+    }
+    setGreyBusy(true)
+    try {
+      const res = await api.greylistingAddAllowedIp(allowedIp.trim())
+      setAllowedIp('')
+      applyOverview(res.overview)
+      notify.success(`IP ${allowedIp.trim()} добавлен в разрешённые`)
+    } catch (e) {
+      notify.error(errorMessage(e))
+    } finally {
+      setGreyBusy(false)
+    }
+  }
+
+  async function removeAllowed(ip: string) {
+    if (!confirm(`Убрать ${ip} из разрешённых?`)) return
+    setGreyBusy(true)
+    try {
+      const res = await api.greylistingRemoveAllowedIp(ip)
+      applyOverview(res.overview)
+      notify.success('IP удалён из разрешённых')
+    } catch (e) {
+      notify.error(errorMessage(e))
+    } finally {
+      setGreyBusy(false)
+    }
+  }
+
+  async function addBanned() {
+    if (!bannedIp.trim()) {
+      notify.error('Укажите IP или CIDR')
+      return
+    }
+    setGreyBusy(true)
+    try {
+      const res = await api.greylistingAddBannedIp(bannedIp.trim(), bannedComment.trim())
+      setBannedIp('')
+      setBannedComment('')
+      applyOverview(res.overview)
+      notify.success(`IP ${bannedIp.trim()} забанен`)
+    } catch (e) {
+      notify.error(errorMessage(e))
+    } finally {
+      setGreyBusy(false)
+    }
+  }
+
+  async function removeBanned(ip: string) {
+    if (!confirm(`Разбанить ${ip}?`)) return
+    setGreyBusy(true)
+    try {
+      const res = await api.greylistingRemoveBannedIp(ip)
+      applyOverview(res.overview)
+      notify.success('IP убран из бана')
+    } catch (e) {
+      notify.error(errorMessage(e))
+    } finally {
+      setGreyBusy(false)
+    }
+  }
+
   async function whitelistFromLog(address: string) {
     if (!address) return
     if (address.includes('@') && !address.startsWith('@')) {
@@ -134,6 +249,9 @@ export default function GreylistingPage() {
 
   if (loading) return <div>Загрузка...</div>
 
+  const allowedIps = grey?.allowed_ips ?? []
+  const bannedIps = grey?.banned_ips ?? []
+
   return (
     <div>
       <div className="topbar">
@@ -151,7 +269,7 @@ export default function GreylistingPage() {
         <div className="card">
           <p className="muted">
             Защита от спам-ботов: первая попытка доставки отклоняется, нормальные серверы повторяют через несколько минут.
-            Не связан с белым/чёрным списком Amavis и разделом «Антиспам».
+            Не связан с белым/чёрным списком адресов в разделе «Антиспам» (кроме бана IP ниже).
           </p>
           <p>
             Статус:{' '}
@@ -160,23 +278,159 @@ export default function GreylistingPage() {
             ) : (
               <span className="badge down">отключён глобально</span>
             )}
-            {grey.timing.training_mode && (
+            {timingForm.training_mode && (
               <span className="badge" style={{ marginLeft: 8 }}>режим обучения</span>
             )}
           </p>
 
           <h4>Тайминги iRedAPD</h4>
-          <table className="data-table">
-            <tbody>
-              <tr><td>Задержка перед повтором</td><td>{grey.timing.block_expire_minutes} мин</td></tr>
-              <tr><td>Запоминание успешных отправителей</td><td>{grey.timing.auth_triplet_expire_days} дн</td></tr>
-              <tr><td>Хранение неуспешных попыток</td><td>{grey.timing.unauth_triplet_expire_days} дн</td></tr>
-              <tr><td>Обход по SPF</td><td>{grey.timing.bypass_spf ? 'да' : 'нет'}</td></tr>
-            </tbody>
-          </table>
-          <p className="muted">Сообщение отклонения: {grey.timing.rejection_message}</p>
+          <p className="muted">
+            Пишутся в <code>{timingForm.settings_file || '/opt/iredapd/settings.py'}</code>, после сохранения перезапускается iRedAPD.
+          </p>
+          {canWrite ? (
+            <>
+              <div className="form-row">
+                <label className="muted">
+                  Задержка перед повтором (мин)
+                  <input
+                    type="number"
+                    min={1}
+                    max={1440}
+                    value={timingForm.block_expire_minutes}
+                    onChange={(e) => setTimingForm({ ...timingForm, block_expire_minutes: Number(e.target.value) })}
+                  />
+                </label>
+                <label className="muted">
+                  Память успешных (дн)
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    value={timingForm.auth_triplet_expire_days}
+                    onChange={(e) => setTimingForm({ ...timingForm, auth_triplet_expire_days: Number(e.target.value) })}
+                  />
+                </label>
+                <label className="muted">
+                  Хранение неуспешных (дн)
+                  <input
+                    type="number"
+                    min={1}
+                    max={90}
+                    value={timingForm.unauth_triplet_expire_days}
+                    onChange={(e) => setTimingForm({ ...timingForm, unauth_triplet_expire_days: Number(e.target.value) })}
+                  />
+                </label>
+              </div>
+              <div className="form-row">
+                <label className="muted" style={{ flex: 2 }}>
+                  Сообщение отклонения
+                  <input
+                    value={timingForm.rejection_message}
+                    onChange={(e) => setTimingForm({ ...timingForm, rejection_message: e.target.value })}
+                  />
+                </label>
+              </div>
+              <div className="form-row" style={{ alignItems: 'center' }}>
+                <label className="check-label">
+                  <input
+                    type="checkbox"
+                    checked={timingForm.bypass_spf}
+                    onChange={(e) => setTimingForm({ ...timingForm, bypass_spf: e.target.checked })}
+                  />
+                  Обход по SPF
+                </label>
+                <label className="check-label">
+                  <input
+                    type="checkbox"
+                    checked={timingForm.training_mode}
+                    onChange={(e) => setTimingForm({ ...timingForm, training_mode: e.target.checked })}
+                  />
+                  Режим обучения (не отклонять, только учитывать)
+                </label>
+                <button disabled={greyBusy} onClick={saveTiming}>Сохранить тайминги</button>
+              </div>
+            </>
+          ) : (
+            <table className="data-table">
+              <tbody>
+                <tr><td>Задержка перед повтором</td><td>{grey.timing.block_expire_minutes} мин</td></tr>
+                <tr><td>Запоминание успешных отправителей</td><td>{grey.timing.auth_triplet_expire_days} дн</td></tr>
+                <tr><td>Хранение неуспешных попыток</td><td>{grey.timing.unauth_triplet_expire_days} дн</td></tr>
+                <tr><td>Обход по SPF</td><td>{grey.timing.bypass_spf ? 'да' : 'нет'}</td></tr>
+              </tbody>
+            </table>
+          )}
 
-          <h4 style={{ marginTop: 20 }}>Статистика за {(grey.stats?.hours ?? 24)} ч</h4>
+          <h4 style={{ marginTop: 24 }}>Разрешённые IP (обход greylist)</h4>
+          <p className="muted">
+            С этих IP/сетей greylist не задерживает письма. Можно указать адрес или CIDR, например <code>192.168.1.10</code> или <code>10.0.0.0/24</code>.
+          </p>
+          {canWrite && (
+            <div className="form-row">
+              <input
+                placeholder="IP или CIDR"
+                value={allowedIp}
+                onChange={(e) => setAllowedIp(e.target.value)}
+              />
+              <button disabled={greyBusy} onClick={addAllowed}>Добавить</button>
+            </div>
+          )}
+          <EntryList
+            items={allowedIps}
+            canRemove={canWrite}
+            onRemove={removeAllowed}
+            emptyText="Разрешённых IP нет"
+          />
+
+          <h4 style={{ marginTop: 24 }}>Забаненные IP (чёрный список)</h4>
+          <p className="muted">
+            Письма с этих IP отклоняются политикой iRedAPD/Amavis (тот же механизм, что чёрный список в «Антиспам», только IP).
+          </p>
+          {canWrite && (
+            <div className="form-row">
+              <input
+                placeholder="IP или CIDR"
+                value={bannedIp}
+                onChange={(e) => setBannedIp(e.target.value)}
+              />
+              <input
+                placeholder="Комментарий (необязательно)"
+                value={bannedComment}
+                onChange={(e) => setBannedComment(e.target.value)}
+              />
+              <button disabled={greyBusy} onClick={addBanned}>Забанить</button>
+            </div>
+          )}
+          {(bannedIps.length === 0) ? (
+            <p className="muted">Забаненных IP нет</p>
+          ) : (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>IP / CIDR</th>
+                  <th>Комментарий</th>
+                  {canWrite && <th></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {bannedIps.map((row) => (
+                  <tr key={row.address}>
+                    <td><code>{row.address}</code></td>
+                    <td className="muted">{row.comment || '—'}</td>
+                    {canWrite && (
+                      <td className="actions">
+                        <button className="danger" disabled={greyBusy} onClick={() => removeBanned(row.address)}>
+                          Убрать
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <h4 style={{ marginTop: 24 }}>Статистика за {(grey.stats?.hours ?? 24)} ч</h4>
           <p className="muted">Отклонений по логам: <strong>{grey.stats?.rejections ?? 0}</strong></p>
           {(grey.stats?.top_senders?.length ?? 0) > 0 && (
             <>
@@ -324,8 +578,10 @@ export default function GreylistingPage() {
 
               {(grey.whitelist_addresses?.length ?? 0) > 0 && (
                 <>
-                  <h4 style={{ marginTop: 20 }}>Разрешённые IP/сети</h4>
-                  <p className="muted">Подтянуты из SPF/MX зарегистрированных доменов ({grey.whitelist_addresses!.length}).</p>
+                  <h4 style={{ marginTop: 20 }}>IP из SPF/MX (справочно)</h4>
+                  <p className="muted">
+                    Подтянуты автоматически ({grey.whitelist_addresses!.length}). Редактируйте нужные адреса в блоке «Разрешённые IP».
+                  </p>
                   <div className="log-box" style={{ maxHeight: 160, overflow: 'auto' }}>
                     {grey.whitelist_addresses!.join(', ')}
                   </div>
