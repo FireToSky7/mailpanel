@@ -7,12 +7,14 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.auth import PanelUser, Role, client_ip, get_current_user, require_permission, write_audit
 from app.config import get_config, role_has_permission
-from app.services import amavis_policy, content_filter_ops, fail2ban_ops, group_ops, iredapd, log_reader, mail_ops
+from fastapi.responses import FileResponse
+
+from app.services import amavis_policy, content_filter_ops, fail2ban_ops, group_ops, iredapd, log_archive, log_reader, mail_ops
 from app.services.amavis_policy import AmavisPolicyError
 from app.services.content_filter_ops import ContentFilterError
 from app.services.fail2ban_ops import Fail2banError
 from app.services.iredapd import IredapdError
-from app.services import iredapd, mail_journal_search, postfix_diagnostics, postfix_queue, quarantine_ops
+from app.services import iredapd, postfix_diagnostics, postfix_queue, quarantine_ops
 from app.services.greylisting_ops import get_greylisting_overview, greylisting_stats
 from app.services.postfix_queue import PostfixQueueError
 from app.services.quarantine_ops import QuarantineError
@@ -1058,40 +1060,10 @@ def release_queue_message(
         raise HTTPException(400, str(exc)) from exc
 
 
-@router.get("/logs/search", dependencies=[Depends(require_permission("logs.read"))])
-def logs_search(
-    service: str | None = None,
-    q: str | None = None,
-    queue_id: str | None = None,
-    mail_from: str | None = None,
-    mail_to: str | None = None,
-    date_from: str | None = None,
-    date_to: str | None = None,
-    limit: int = 200,
-    offset: int = 0,
-):
-    try:
-        return mail_journal_search.search_mail_logs(
-            query=q,
-            queue_id=queue_id,
-            mail_from=mail_from,
-            mail_to=mail_to,
-            date_from=date_from,
-            date_to=date_to,
-            service=service,
-            limit=limit,
-            offset=offset,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-
-@router.get("/logs/trace/{queue_id}", dependencies=[Depends(require_permission("logs.read"))])
-def logs_trace(queue_id: str):
-    try:
-        return mail_journal_search.trace_queue_id(queue_id)
-    except RuntimeError as exc:
-        raise HTTPException(400, str(exc)) from exc
+class LogExportRequest(BaseModel):
+    since: str | None = None
+    until: str | None = None
+    label: str = "manual"
 
 
 @router.get("/logs/live/{log_type}", dependencies=[Depends(require_permission("logs.read"))])
@@ -1106,6 +1078,45 @@ def logs_live(log_type: str, lines: int = 200):
     if log_type not in mapping:
         raise HTTPException(404, "Unknown log type")
     return log_reader.tail_live_log(log_type, mapping[log_type], lines)
+
+
+@router.get("/logs/archives", dependencies=[Depends(require_permission("logs.read"))])
+def logs_archives_list():
+    return {
+        "items": log_archive.list_archives(),
+        "server": log_archive.archives_dir_info(),
+    }
+
+
+@router.post("/logs/archives", dependencies=[Depends(require_permission("logs.read"))])
+def logs_archives_create(
+    payload: LogExportRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("logs.read")),
+):
+    try:
+        meta = log_archive.create_archive_from_params(payload.since, payload.until, label=payload.label or "manual")
+        _audit(user, request, "logs_export", "logs", meta.get("id", ""))
+        return {"ok": True, **meta}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"Не удалось собрать архив: {exc}") from exc
+
+
+@router.get("/logs/archives/{archive_id}/download", dependencies=[Depends(require_permission("logs.read"))])
+def logs_archives_download(archive_id: str):
+    try:
+        zip_path = log_archive.get_archive_zip(archive_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return FileResponse(
+        path=str(zip_path),
+        filename=f"mailpanel-logs-{archive_id}.zip",
+        media_type="application/zip",
+    )
 
 
 @router.get("/audit", dependencies=[Depends(require_permission("logs.read"))])

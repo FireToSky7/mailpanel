@@ -157,25 +157,22 @@ export type AuditEntry = {
   created_at: string
 }
 
-export type LogEntry = {
-  id: number
-  logged_at: string
-  service: string
-  level: string
-  queue_id: string | null
-  mail_from: string | null
-  mail_to: string | null
-  status: string | null
-  spam_score: number | null
-  outcome?: string | null
-  message: string
+export type LogArchive = {
+  id: string
+  label?: string
+  created_at?: string
+  since?: string
+  until?: string
+  path?: string
+  zip_path?: string
+  zip_bytes?: number
+  has_zip?: boolean
+  files?: { name: string; bytes: number; lines: number }[]
 }
 
-export type LogsSearchResult = {
-  total: number
-  items: LogEntry[]
-  source?: string
-  source_label?: string
+export type LogArchivesList = {
+  items: LogArchive[]
+  server: { path: string; count: number }
 }
 
 export type DashboardData = {
@@ -550,12 +547,40 @@ export const api = {
   releaseQueueItem: (queueId: string) =>
     request<{ ok: boolean }>(`/api/queue/${encodeURIComponent(queueId)}/release`, { method: 'POST' }),
   flushQueue: () => request<{ ok: boolean }>('/api/queue/flush', { method: 'POST', body: JSON.stringify({ confirm: 'FLUSH_ALL' }) }),
-  logsSearch: (params: URLSearchParams) => request<LogsSearchResult>(`/api/logs/search?${params}`),
-  logsTrace: (queueId: string) => request<LogEntry[]>(`/api/logs/trace/${queueId}`),
   logsLive: (type: string, lines = 200) =>
     request<{ lines: string[]; source: string; source_label: string }>(
       `/api/logs/live/${type}?lines=${lines}`,
     ),
+  logsArchives: () => request<LogArchivesList>('/api/logs/archives'),
+  createLogsArchive: (body: { since?: string; until?: string; label?: string }) =>
+    request<{ ok: boolean } & LogArchive>('/api/logs/archives', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  downloadLogsArchive: async (archiveId: string) => {
+    const token = getToken()
+    const headers: Record<string, string> = {}
+    if (token) headers.Authorization = `Bearer ${token}`
+    const res = await fetch(`/api/logs/archives/${encodeURIComponent(archiveId)}/download`, { headers })
+    if (res.status === 401) {
+      clearSession()
+      window.location.href = toAppUrl('/login')
+      throw new Error('Unauthorized')
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(formatApiError(data.detail) || 'Не удалось скачать архив')
+    }
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `mailpanel-logs-${archiveId}.zip`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  },
   services: () => request<ServiceStatus[]>('/api/services'),
   restartService: (name: string) => request<ServiceStatus>(`/api/services/${name}/restart`, { method: 'POST' }),
   fail2ban: () => request<Fail2banData>('/api/fail2ban'),

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type LogEntry } from '../api'
+import { api, type LogArchive } from '../api'
 import { errorMessage } from '../errors'
 import { notify } from '../notify'
 
@@ -10,88 +10,47 @@ const LIVE_TYPES: { id: string; label: string }[] = [
   { id: 'system', label: 'Система' },
 ]
 
-function defaultDateFrom(): string {
-  const date = new Date(Date.now() - 24 * 60 * 60 * 1000)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+function pad(n: number) {
+  return String(n).padStart(2, '0')
+}
+
+function toLocalInput(d: Date): string {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function hoursAgo(hours: number): string {
+  return toLocalInput(new Date(Date.now() - hours * 60 * 60 * 1000))
+}
+
+function formatBytes(n?: number): string {
+  if (n == null || Number.isNaN(n)) return '—'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
 export default function LogsPage() {
-  const [items, setItems] = useState<LogEntry[]>([])
-  const [total, setTotal] = useState(0)
-  const [sourceLabel, setSourceLabel] = useState('')
-  const [q, setQ] = useState('')
-  const [queueId, setQueueId] = useState('')
-  const [mailFrom, setMailFrom] = useState('')
-  const [mailTo, setMailTo] = useState('')
-  const [dateFrom, setDateFrom] = useState(defaultDateFrom)
-  const [dateTo, setDateTo] = useState('')
+  const [since, setSince] = useState(() => hoursAgo(24))
+  const [until, setUntil] = useState('')
+  const [archives, setArchives] = useState<LogArchive[]>([])
+  const [serverPath, setServerPath] = useState('/var/log/mailpanel/archives')
+  const [exporting, setExporting] = useState(false)
   const [live, setLive] = useState('')
   const [liveSource, setLiveSource] = useState('')
   const [liveType, setLiveType] = useState<string | null>(null)
   const [liveAuto, setLiveAuto] = useState(false)
-  const [trace, setTrace] = useState<LogEntry[]>([])
-  const [traceId, setTraceId] = useState('')
   const [audit, setAudit] = useState<any[]>([])
-  const [searching, setSearching] = useState(false)
-  const [hasSearched, setHasSearched] = useState(false)
   const logBoxRef = useRef<HTMLPreElement>(null)
 
-  async function search() {
-    if (!q.trim() && !queueId.trim() && !mailFrom.trim() && !mailTo.trim()) {
-      notify.error('Укажите отправителя, получателя, Queue-ID или текст для поиска')
-      return
-    }
-    setSearching(true)
-    try {
-      const params = new URLSearchParams()
-      if (q.trim()) params.set('q', q.trim())
-      if (queueId.trim()) params.set('queue_id', queueId.trim())
-      if (mailFrom.trim()) params.set('mail_from', mailFrom.trim())
-      if (mailTo.trim()) params.set('mail_to', mailTo.trim())
-      if (dateFrom) params.set('date_from', dateFrom)
-      if (dateTo) params.set('date_to', dateTo)
-      const res = await api.logsSearch(params)
-      setItems(res.items)
-      setTotal(res.total)
-      setSourceLabel(res.source_label || '')
-      setTrace([])
-      setTraceId('')
-      setHasSearched(true)
-    } catch (e) {
-      notify.error(errorMessage(e))
-    } finally {
-      setSearching(false)
-    }
-  }
-
-  async function showTrace(id: string) {
-    if (!id) return
-    try {
-      setTraceId(id)
-      setQueueId(id)
-      setTrace(await api.logsTrace(id))
-    } catch (e) {
-      notify.error(errorMessage(e))
-    }
-  }
-
-  async function loadLive(type: string, scrollToEnd = true) {
-    try {
-      const res = await api.logsLive(type)
-      setLive(res.lines.join('\n'))
-      setLiveSource(res.source_label)
-      setLiveType(type)
-      if (scrollToEnd && logBoxRef.current) {
-        logBoxRef.current.scrollTop = logBoxRef.current.scrollHeight
-      }
-    } catch (e) {
-      notify.error(errorMessage(e))
-    }
+  async function loadArchives() {
+    const res = await api.logsArchives()
+    setArchives(res.items)
+    if (res.server?.path) setServerPath(res.server.path)
   }
 
   useEffect(() => {
     api.audit().then(setAudit).catch((e) => notify.error(errorMessage(e)))
+    loadArchives().catch((e) => notify.error(errorMessage(e)))
   }, [])
 
   useEffect(() => {
@@ -102,119 +61,122 @@ export default function LogsPage() {
     return () => window.clearInterval(timer)
   }, [liveAuto, liveType])
 
+  async function loadLive(type: string, scrollToEnd = true) {
+    const res = await api.logsLive(type)
+    setLive(res.lines.join('\n'))
+    setLiveSource(res.source_label)
+    setLiveType(type)
+    if (scrollToEnd && logBoxRef.current) {
+      logBoxRef.current.scrollTop = logBoxRef.current.scrollHeight
+    }
+  }
+
+  function applyPreset(hours: number) {
+    setSince(hoursAgo(hours))
+    setUntil('')
+  }
+
+  async function exportAndDownload() {
+    setExporting(true)
+    try {
+      const body: { since?: string; until?: string; label?: string } = {
+        since: since || undefined,
+        until: until || undefined,
+        label: 'manual',
+      }
+      const meta = await api.createLogsArchive(body)
+      notify.success(`Архив сохранён на сервере: ${meta.path || meta.id}`)
+      await api.downloadLogsArchive(meta.id)
+      await loadArchives()
+    } catch (e) {
+      notify.error(errorMessage(e))
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  async function downloadExisting(id: string) {
+    try {
+      await api.downloadLogsArchive(id)
+    } catch (e) {
+      notify.error(errorMessage(e))
+    }
+  }
+
   return (
     <div>
       <div className="topbar"><h2>Логи</h2></div>
-      <div className="card table-scroll">
-        <h3>Поиск по почтовым логам</h3>
+
+      <div className="card">
+        <h3>Выгрузка логов</h3>
         <p className="muted">
-          Поиск по journalctl, файлам логов (/var/log/maillog и др.) и локальной БД MailPanel.
-          Укажите отправителя и/или получателя, задайте период и нажмите «Найти».
-          Колонка «Результат» показывает итог: доставка, очередь, карантин, отклонение и т.д.
-          Клик по Queue-ID — полная история письма.
-          {sourceLabel && <> Источник: <strong>{sourceLabel}</strong>.</>}
+          Собирает логи Postfix/Amavis, Dovecot, iRedAPD и системы за период.
+          Архив сохраняется на сервере в <code>{serverPath}</code> и скачивается как ZIP.
+          Для разбора «письмо не дошло» откройте <code>mail.log</code> и найдите адрес получателя.
         </p>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault()
-            search()
-          }}
-        >
-        <div className="form-row">
-          <input placeholder="Текст в сообщении" value={q} onChange={(e) => setQ(e.target.value)} />
-          <input placeholder="Queue-ID" value={queueId} onChange={(e) => setQueueId(e.target.value)} />
-        </div>
-        <div className="form-row">
-          <input placeholder="Отправитель" value={mailFrom} onChange={(e) => setMailFrom(e.target.value)} />
-          <input placeholder="Получатель" value={mailTo} onChange={(e) => setMailTo(e.target.value)} />
+        <div className="form-row" style={{ marginBottom: 8 }}>
+          <button type="button" className="secondary" onClick={() => applyPreset(1)}>1 час</button>
+          <button type="button" className="secondary" onClick={() => applyPreset(6)}>6 часов</button>
+          <button type="button" className="secondary" onClick={() => applyPreset(24)}>24 часа</button>
         </div>
         <div className="form-row">
           <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             С
-            <input type="datetime-local" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <input type="datetime-local" value={since} onChange={(e) => setSince(e.target.value)} />
           </label>
           <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             По
-            <input type="datetime-local" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <input type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} />
           </label>
-          <button type="submit" disabled={searching}>{searching ? 'Поиск…' : 'Найти'}</button>
-          <button type="button" className="secondary" onClick={() => {
-            setQ('')
-            setQueueId('')
-            setMailFrom('')
-            setMailTo('')
-            setDateFrom(defaultDateFrom())
-            setDateTo('')
-            setTrace([])
-            setTraceId('')
-            setItems([])
-            setTotal(0)
-            setHasSearched(false)
-          }}>Сбросить</button>
+          <button type="button" onClick={exportAndDownload} disabled={exporting}>
+            {exporting ? 'Сбор…' : 'Сформировать и скачать'}
+          </button>
         </div>
-        </form>
-        <p className="muted">Найдено: {total}</p>
+        <p className="muted" style={{ marginTop: 8 }}>
+          Пустое «По» = текущее время. Максимум 7 суток. Автоснимки раз в час тоже пишутся в эту папку.
+        </p>
+
+        <h4 style={{ marginTop: 20 }}>Архивы на сервере</h4>
         <table className="data-table">
           <thead>
             <tr>
-              <th>Время</th>
-              <th>Служба</th>
-              <th>От</th>
-              <th>Кому</th>
-              <th>Queue-ID</th>
-              <th>Результат</th>
-              <th>Сообщение</th>
+              <th>ID</th>
+              <th>Период</th>
+              <th>Создан</th>
+              <th>Размер</th>
+              <th>Путь</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
-            {items.length === 0 && (
-              <tr><td colSpan={7} className="muted">
-                {hasSearched ? 'За указанный период записей не найдено' : 'Укажите отправителя, получателя или Queue-ID и нажмите «Найти»'}
-              </td></tr>
+            {archives.length === 0 && (
+              <tr><td colSpan={6} className="muted">Архивов пока нет</td></tr>
             )}
-            {items.map((row) => (
-              <tr key={row.id}>
-                <td>{row.logged_at}</td>
-                <td>{row.service}</td>
-                <td>{row.mail_from || '—'}</td>
-                <td>{row.mail_to || '—'}</td>
-                <td>
-                  {row.queue_id ? (
-                    <button className="secondary" onClick={() => showTrace(row.queue_id!)}>{row.queue_id}</button>
-                  ) : '—'}
+            {archives.map((a) => (
+              <tr key={a.id}>
+                <td>{a.id}{a.label === 'auto' ? ' (auto)' : ''}</td>
+                <td className="muted">
+                  {(a.since || '—').replace('T', ' ').slice(0, 16)}
+                  {' → '}
+                  {(a.until || '—').replace('T', ' ').slice(0, 16)}
                 </td>
-                <td>{row.outcome || row.status || '—'}</td>
-                <td title={row.message}>{row.message}</td>
+                <td>{(a.created_at || '—').replace('T', ' ').slice(0, 19)}</td>
+                <td>{formatBytes(a.zip_bytes)}</td>
+                <td title={a.path}><code style={{ fontSize: '0.8rem' }}>{a.path || '—'}</code></td>
+                <td className="actions">
+                  <button className="secondary" onClick={() => downloadExisting(a.id)}>Скачать</button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
-        {trace.length > 0 && (
-          <div style={{ marginTop: 16 }}>
-            <h4>История письма {traceId}</h4>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Время</th>
-                  <th>Служба</th>
-                  <th>Результат</th>
-                  <th>Сообщение</th>
-                </tr>
-              </thead>
-              <tbody>
-                {trace.map((row) => (
-                  <tr key={row.id}>
-                    <td>{row.logged_at}</td>
-                    <td>{row.service}</td>
-                    <td>{row.outcome || row.status || '—'}</td>
-                    <td title={row.message}>{row.message}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <div style={{ marginTop: 8 }}>
+          <button type="button" className="secondary" onClick={() => loadArchives().catch((e) => notify.error(errorMessage(e)))}>
+            Обновить список
+          </button>
+        </div>
       </div>
+
       <div className="card">
         <h3>Живой лог</h3>
         <p className="muted">
@@ -226,7 +188,7 @@ export default function LogsPage() {
             <button
               key={t.id}
               className={liveType === t.id ? '' : 'secondary'}
-              onClick={() => loadLive(t.id)}
+              onClick={() => loadLive(t.id).catch((e) => notify.error(errorMessage(e)))}
             >
               {t.label}
             </button>
@@ -241,6 +203,7 @@ export default function LogsPage() {
         </div>
         <pre ref={logBoxRef} className="log-box" style={{ maxHeight: 420 }}>{live || 'Выберите тип лога'}</pre>
       </div>
+
       <div className="card">
         <h3>Аудит действий в панели</h3>
         <table>

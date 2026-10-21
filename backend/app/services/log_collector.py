@@ -131,10 +131,17 @@ class LogCollector:
         return total
 
     def run_loop(self) -> None:
+        from app.services import log_archive
+
         cfg = get_config()
+        last_archive: datetime | None = None
         while True:
             try:
                 self.run_once()
+            except Exception:
+                pass
+            try:
+                last_archive, _ = log_archive.maybe_auto_archive(last_archive)
             except Exception:
                 pass
             time.sleep(cfg.log_collector.poll_interval_seconds)

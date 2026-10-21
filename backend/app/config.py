@@ -83,12 +83,16 @@ class PathsConfig(BaseModel):
     dovecot_global_sieve: str = "/var/vmail/sieve/dovecot.sieve"
     fail2ban_policy_file: str = "/etc/mailpanel/fail2ban_policy.yaml"
     fail2ban_disabled_log_file: str = "/etc/mailpanel/fail2ban_disabled_mailboxes.yaml"
+    mailpanel_log_dir: str = "/var/log/mailpanel"
 
 
 class LogCollectorConfig(BaseModel):
     enabled: bool = True
     poll_interval_seconds: int = 5
     retention_days: int = 90
+    archive_enabled: bool = True
+    archive_interval_hours: float = 1.0
+    archive_retention_days: int = 14
 
 
 class AmavisdConfig(BaseModel):
