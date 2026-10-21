@@ -37,20 +37,15 @@ export default function GreylistingPage() {
   const [greyToAddr, setGreyToAddr] = useState('')
   const [greyFromAddr, setGreyFromAddr] = useState('')
   const [greyWhitelistDomain, setGreyWhitelistDomain] = useState('')
-  const [allowedText, setAllowedText] = useState('')
   const [spfText, setSpfText] = useState('')
-  const [bannedIp, setBannedIp] = useState('')
-  const [bannedComment, setBannedComment] = useState('')
   const [timingForm, setTimingForm] = useState<GreylistingTiming>(emptyTiming)
   const [greyBusy, setGreyBusy] = useState(false)
   const [loading, setLoading] = useState(true)
-  const allowedFileRef = useRef<HTMLInputElement>(null)
   const spfFileRef = useRef<HTMLInputElement>(null)
   const role = getUser()?.role
   const canWrite = role === 'superadmin' || role === 'admin'
 
   function syncTexts(data: GreylistingData) {
-    setAllowedText(ipsToText(data.allowed_ips))
     setSpfText(ipsToText((data.whitelist_addresses ?? []).filter((x) => !x.startsWith('@'))))
   }
 
@@ -193,19 +188,6 @@ export default function GreylistingPage() {
     )
   }
 
-  async function saveAllowedText() {
-    setGreyBusy(true)
-    try {
-      const res = await api.greylistingSetAllowedIps(allowedText)
-      applyOverview(res.overview)
-      notify.success(`Разрешённые IP сохранены (${res.items.length})`)
-    } catch (e) {
-      notify.error(errorMessage(e))
-    } finally {
-      setGreyBusy(false)
-    }
-  }
-
   async function saveSpfText() {
     if (!confirm('Заменить весь список IP из SPF/MX содержимым текстового поля?')) return
     setGreyBusy(true)
@@ -234,39 +216,6 @@ export default function GreylistingPage() {
     reader.readAsText(file)
   }
 
-  async function addBanned() {
-    if (!bannedIp.trim()) {
-      notify.error('Укажите IP или CIDR')
-      return
-    }
-    setGreyBusy(true)
-    try {
-      const res = await api.greylistingAddBannedIp(bannedIp.trim(), bannedComment.trim())
-      setBannedIp('')
-      setBannedComment('')
-      applyOverview(res.overview)
-      notify.success(`IP ${bannedIp.trim()} забанен`)
-    } catch (e) {
-      notify.error(errorMessage(e))
-    } finally {
-      setGreyBusy(false)
-    }
-  }
-
-  async function removeBanned(ip: string) {
-    if (!confirm(`Разбанить ${ip}?`)) return
-    setGreyBusy(true)
-    try {
-      const res = await api.greylistingRemoveBannedIp(ip)
-      applyOverview(res.overview)
-      notify.success('IP убран из бана')
-    } catch (e) {
-      notify.error(errorMessage(e))
-    } finally {
-      setGreyBusy(false)
-    }
-  }
-
   async function whitelistFromLog(address: string) {
     if (!address) return
     if (address.includes('@') && !address.startsWith('@')) {
@@ -285,8 +234,6 @@ export default function GreylistingPage() {
 
   if (loading) return <div>Загрузка...</div>
 
-  const bannedIps = grey?.banned_ips ?? []
-  const allowedCount = allowedText.split(/\r?\n/).filter((l) => l.trim() && !l.trim().startsWith('#')).length
   const spfCount = spfText.split(/\r?\n/).filter((l) => l.trim() && !l.trim().startsWith('#')).length
 
   return (
@@ -306,7 +253,7 @@ export default function GreylistingPage() {
         <div className="card">
           <p className="muted">
             Защита от спам-ботов: первая попытка доставки отклоняется, нормальные серверы повторяют через несколько минут.
-            Не связан с белым/чёрным списком адресов в разделе «Антиспам» (кроме бана IP ниже).
+            Белый/чёрный список из раздела «Антиспам» greylist не обходит — для обхода задержки используйте SPF-whitelist ниже.
           </p>
           <p>
             Статус:{' '}
@@ -394,99 +341,6 @@ export default function GreylistingPage() {
                 <tr><td>Запоминание успешных отправителей</td><td>{grey.timing.auth_triplet_expire_days} дн</td></tr>
                 <tr><td>Хранение неуспешных попыток</td><td>{grey.timing.unauth_triplet_expire_days} дн</td></tr>
                 <tr><td>Обход по SPF</td><td>{grey.timing.bypass_spf ? 'да' : 'нет'}</td></tr>
-              </tbody>
-            </table>
-          )}
-
-          <h4 style={{ marginTop: 24 }}>Разрешённые IP (обход greylist)</h4>
-          <p className="muted">
-            Ручные исключения: один IP/CIDR на строку (как в .txt). Строки с <code>#</code> — комментарии.
-            Сейчас в поле: <strong>{allowedCount}</strong>.
-          </p>
-          <textarea
-            className="log-box"
-            style={{ width: '100%', minHeight: 180, fontFamily: 'ui-monospace, Consolas, monospace', fontSize: '0.85rem' }}
-            value={allowedText}
-            readOnly={!canWrite}
-            onChange={(e) => setAllowedText(e.target.value)}
-            placeholder={'192.168.1.10\n10.0.0.0/24'}
-          />
-          {canWrite && (
-            <div className="form-row" style={{ marginTop: 8 }}>
-              <button disabled={greyBusy} onClick={saveAllowedText}>Сохранить список</button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={greyBusy}
-                onClick={() => downloadTextFile('greylist-allowed-ips.txt', allowedText)}
-              >
-                Скачать .txt
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={greyBusy}
-                onClick={() => allowedFileRef.current?.click()}
-              >
-                Загрузить .txt
-              </button>
-              <input
-                ref={allowedFileRef}
-                type="file"
-                accept=".txt,text/plain"
-                style={{ display: 'none' }}
-                onChange={(e) => {
-                  onPickTxt(e.target.files?.[0], setAllowedText)
-                  e.target.value = ''
-                }}
-              />
-            </div>
-          )}
-
-          <h4 style={{ marginTop: 24 }}>Забаненные IP (чёрный список)</h4>
-          <p className="muted">
-            Письма с этих IP отклоняются политикой iRedAPD/Amavis (тот же механизм, что чёрный список в «Антиспам», только IP).
-          </p>
-          {canWrite && (
-            <div className="form-row">
-              <input
-                placeholder="IP или CIDR"
-                value={bannedIp}
-                onChange={(e) => setBannedIp(e.target.value)}
-              />
-              <input
-                placeholder="Комментарий (необязательно)"
-                value={bannedComment}
-                onChange={(e) => setBannedComment(e.target.value)}
-              />
-              <button disabled={greyBusy} onClick={addBanned}>Забанить</button>
-            </div>
-          )}
-          {(bannedIps.length === 0) ? (
-            <p className="muted">Забаненных IP нет</p>
-          ) : (
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>IP / CIDR</th>
-                  <th>Комментарий</th>
-                  {canWrite && <th></th>}
-                </tr>
-              </thead>
-              <tbody>
-                {bannedIps.map((row) => (
-                  <tr key={row.address}>
-                    <td><code>{row.address}</code></td>
-                    <td className="muted">{row.comment || '—'}</td>
-                    {canWrite && (
-                      <td className="actions">
-                        <button className="danger" disabled={greyBusy} onClick={() => removeBanned(row.address)}>
-                          Убрать
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
               </tbody>
             </table>
           )}

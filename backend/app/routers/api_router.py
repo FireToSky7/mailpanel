@@ -16,13 +16,8 @@ from app.services.fail2ban_ops import Fail2banError
 from app.services.iredapd import IredapdError
 from app.services import iredapd, postfix_diagnostics, postfix_queue, quarantine_ops
 from app.services.greylisting_ops import (
-    add_allowed_ip,
-    add_banned_ip,
     get_greylisting_overview,
     greylisting_stats,
-    remove_allowed_ip,
-    remove_banned_ip,
-    set_allowed_ips,
     set_whitelist_ips,
     update_greylisting_timing,
 )
@@ -179,11 +174,6 @@ class GreylistTimingUpdate(BaseModel):
     auth_triplet_expire_days: int | None = Field(default=None, ge=1, le=365)
     unauth_triplet_expire_days: int | None = Field(default=None, ge=1, le=90)
     bypass_spf: bool | None = None
-
-
-class GreylistIpRequest(BaseModel):
-    ip: str = Field(min_length=3, max_length=80)
-    comment: str = Field(default="", max_length=400)
 
 
 class GreylistIpListTextRequest(BaseModel):
@@ -755,76 +745,6 @@ def grey_update_timing(
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(500, str(exc)) from exc
-
-
-@router.post("/greylisting/allowed-ips", dependencies=[Depends(require_permission("greylisting.write"))])
-def grey_add_allowed_ip(
-    payload: GreylistIpRequest,
-    request: Request,
-    user: PanelUser = Depends(require_permission("greylisting.write")),
-):
-    try:
-        add_allowed_ip(payload.ip)
-        _audit(user, request, "allowed_ip_add", "greylisting", payload.ip.strip())
-        return {"ok": True, "overview": get_greylisting_overview()}
-    except (ValueError, iredapd.IredapdError) as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-
-@router.post("/greylisting/allowed-ips/remove", dependencies=[Depends(require_permission("greylisting.write"))])
-def grey_remove_allowed_ip(
-    payload: GreylistIpRequest,
-    request: Request,
-    user: PanelUser = Depends(require_permission("greylisting.write")),
-):
-    try:
-        remove_allowed_ip(payload.ip)
-        _audit(user, request, "allowed_ip_remove", "greylisting", payload.ip.strip())
-        return {"ok": True, "overview": get_greylisting_overview()}
-    except (ValueError, RuntimeError, iredapd.IredapdError) as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-
-@router.post("/greylisting/banned-ips", dependencies=[Depends(require_permission("greylisting.write"))])
-def grey_add_banned_ip(
-    payload: GreylistIpRequest,
-    request: Request,
-    user: PanelUser = Depends(require_permission("greylisting.write")),
-):
-    try:
-        add_banned_ip(payload.ip, payload.comment)
-        _audit(user, request, "banned_ip_add", "greylisting", payload.ip.strip())
-        return {"ok": True, "overview": get_greylisting_overview()}
-    except (ValueError, iredapd.IredapdError) as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-
-@router.post("/greylisting/banned-ips/remove", dependencies=[Depends(require_permission("greylisting.write"))])
-def grey_remove_banned_ip(
-    payload: GreylistIpRequest,
-    request: Request,
-    user: PanelUser = Depends(require_permission("greylisting.write")),
-):
-    try:
-        remove_banned_ip(payload.ip)
-        _audit(user, request, "banned_ip_remove", "greylisting", payload.ip.strip())
-        return {"ok": True, "overview": get_greylisting_overview()}
-    except (ValueError, iredapd.IredapdError) as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-
-@router.put("/greylisting/allowed-ips", dependencies=[Depends(require_permission("greylisting.write"))])
-def grey_set_allowed_ips(
-    payload: GreylistIpListTextRequest,
-    request: Request,
-    user: PanelUser = Depends(require_permission("greylisting.write")),
-):
-    try:
-        items = set_allowed_ips(payload.text)
-        _audit(user, request, "allowed_ips_set", "greylisting", f"count={len(items)}")
-        return {"ok": True, "items": items, "overview": get_greylisting_overview()}
-    except (ValueError, RuntimeError, iredapd.IredapdError) as exc:
-        raise HTTPException(400, str(exc)) from exc
 
 
 @router.put("/greylisting/whitelist-ips", dependencies=[Depends(require_permission("greylisting.write"))])

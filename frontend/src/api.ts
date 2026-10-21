@@ -223,19 +223,12 @@ export type GreylistingStats = {
   }[]
 }
 
-export type GreylistingBannedIp = {
-  address: string
-  comment?: string
-}
-
 export type GreylistingData = {
   global_enabled: boolean
   timing: GreylistingTiming
   rules: GreylistingRule[]
   whitelist_domains: string[]
   whitelist_addresses: string[]
-  allowed_ips?: string[]
-  banned_ips?: GreylistingBannedIp[]
   stats: GreylistingStats
   notes: string[]
 }
@@ -527,31 +520,6 @@ export const api = {
     request<{ ok: boolean; timing: GreylistingTiming }>('/api/greylisting/timing', {
       method: 'PUT',
       body: JSON.stringify(body),
-    }),
-  greylistingAddAllowedIp: (ip: string) =>
-    request<{ ok: boolean; overview: GreylistingData }>('/api/greylisting/allowed-ips', {
-      method: 'POST',
-      body: JSON.stringify({ ip }),
-    }),
-  greylistingRemoveAllowedIp: (ip: string) =>
-    request<{ ok: boolean; overview: GreylistingData }>('/api/greylisting/allowed-ips/remove', {
-      method: 'POST',
-      body: JSON.stringify({ ip }),
-    }),
-  greylistingAddBannedIp: (ip: string, comment = '') =>
-    request<{ ok: boolean; overview: GreylistingData }>('/api/greylisting/banned-ips', {
-      method: 'POST',
-      body: JSON.stringify({ ip, comment }),
-    }),
-  greylistingRemoveBannedIp: (ip: string) =>
-    request<{ ok: boolean; overview: GreylistingData }>('/api/greylisting/banned-ips/remove', {
-      method: 'POST',
-      body: JSON.stringify({ ip }),
-    }),
-  greylistingSetAllowedIps: (text: string) =>
-    request<{ ok: boolean; items: string[]; overview: GreylistingData }>('/api/greylisting/allowed-ips', {
-      method: 'PUT',
-      body: JSON.stringify({ text }),
     }),
   greylistingSetWhitelistIps: (text: string) =>
     request<{ ok: boolean; items: string[]; overview: GreylistingData }>('/api/greylisting/whitelist-ips', {

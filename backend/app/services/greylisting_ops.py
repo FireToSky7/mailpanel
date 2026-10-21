@@ -626,11 +626,6 @@ def get_greylisting_overview() -> dict[str, Any]:
     rules = _parse_settings_table(settings_raw)
     whitelist_domains = _parse_whitelist_domains(domains_raw)
     whitelist_addresses = _parse_whitelist_addresses(whitelists_raw)
-    allowed_ips = list_allowed_ips(rules, whitelist_addresses)
-    try:
-        banned_ips = list_banned_ips()
-    except Exception:
-        banned_ips = []
     timing = read_greylisting_timing()
     try:
         stats = greylisting_stats()
@@ -647,8 +642,6 @@ def get_greylisting_overview() -> dict[str, Any]:
         "rules": rules,
         "whitelist_domains": whitelist_domains,
         "whitelist_addresses": whitelist_addresses,
-        "allowed_ips": allowed_ips,
-        "banned_ips": banned_ips,
         "stats": stats,
         "raw": {
             "settings": settings_raw,
@@ -657,9 +650,7 @@ def get_greylisting_overview() -> dict[str, Any]:
         },
         "notes": [
             "Greylisting откладывает первую попытку доставки; легитимные серверы повторяют отправку.",
-            "Разрешённые IP — обход greylist (письмо принимается без задержки).",
-            "Забаненные IP — чёрный список iRedAPD/Amavis: письма с этих адресов отклоняются.",
-            "Домены в SPF-whitelist пропускаются без задержки после обновления IP из DNS.",
+            "Обход задержки — через SPF-whitelist доменов и список IP из SPF/MX (не через белый список «Антиспам»).",
             f"Повторная доставка разрешена не ранее чем через {timing['block_expire_minutes']} мин.",
             f"Успешные отправители запоминаются на {timing['auth_triplet_expire_days']} дн.",
         ],
