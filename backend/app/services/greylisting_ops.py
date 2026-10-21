@@ -403,15 +403,104 @@ def _allowed_ips_from_rules(rules: list[dict[str, Any]]) -> list[str]:
 
 
 def list_allowed_ips(rules: list[dict[str, Any]] | None = None, whitelist_addresses: list[str] | None = None) -> list[str]:
+    """Только ручные исключения (правила disabled для IP), без SPF-списка."""
+    del whitelist_addresses  # SPF хранится отдельно в whitelist_addresses
     if rules is None:
         rules = _parse_settings_table(iredapd.list_greylisting())
-    if whitelist_addresses is None:
-        whitelist_addresses = _parse_whitelist_addresses(iredapd.list_greylisting_whitelists())
-    combined = set(_allowed_ips_from_rules(rules))
-    for item in whitelist_addresses:
-        if _looks_like_ip(item):
-            combined.add(item.strip().lower())
-    return sorted(combined)
+    return _allowed_ips_from_rules(rules)
+
+
+def parse_ip_list_text(text: str) -> list[str]:
+    """Разбор txt: одна запись на строку, # — комментарий, пустые строки игнорируются."""
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # допускаем "ip # комментарий" и "ip,cidr"
+        for part in re.split(r"[\s,;]+", line):
+            token = part.strip().lower()
+            if not token or token.startswith("#"):
+                continue
+            value = normalize_ip_or_cidr(token)
+            if value not in seen:
+                seen.add(value)
+                result.append(value)
+    return result
+
+
+def set_allowed_ips(ips: list[str] | str) -> list[str]:
+    desired = parse_ip_list_text(ips) if isinstance(ips, str) else [normalize_ip_or_cidr(x) for x in ips]
+    desired_set = set(desired)
+    current = set(list_allowed_ips())
+    for ip in sorted(desired_set - current):
+        add_allowed_ip(ip)
+    for ip in sorted(current - desired_set):
+        remove_allowed_ip(ip)
+    return list_allowed_ips()
+
+
+def _delete_ip_rows(cur, table: str) -> None:
+    cur.execute(
+        f"DELETE FROM {table} WHERE "
+        f"sender NOT LIKE '@%%' AND TRIM(sender) != '' "
+        f"AND (sender REGEXP '^[0-9]' OR sender LIKE '%%:%%')"
+    )
+
+
+def _insert_whitelist_ip(cur, table: str, sender: str) -> None:
+    try:
+        cur.execute(
+            f"INSERT INTO {table} (account, sender, comment) VALUES (%s, %s, %s)",
+            ("@.", sender, "mailpanel"),
+        )
+    except Exception:
+        cur.execute(
+            f"INSERT INTO {table} (account, sender) VALUES (%s, %s)",
+            ("@.", sender),
+        )
+
+
+def set_whitelist_ips(ips: list[str] | str) -> list[str]:
+    """Полная замена IP/CIDR в greylisting_whitelists (SPF/MX список)."""
+    desired = parse_ip_list_text(ips) if isinstance(ips, str) else [normalize_ip_or_cidr(x) for x in ips]
+    cfg = _read_iredapd_db_settings()
+    if not cfg:
+        raise RuntimeError(
+            "Не удалось прочитать параметры БД iRedAPD из settings.py — "
+            "нельзя сохранить большой список IP"
+        )
+    conn = pymysql.connect(
+        host=str(cfg["host"]),
+        port=int(cfg["port"]),
+        user=str(cfg["user"]),
+        password=str(cfg["password"]),
+        database=str(cfg["database"]),
+        charset="utf8mb4",
+        cursorclass=DictCursor,
+        autocommit=False,
+    )
+    try:
+        with conn.cursor() as cur:
+            primary = "greylisting_whitelists"
+            _delete_ip_rows(cur, primary)
+            for sender in desired:
+                _insert_whitelist_ip(cur, primary, sender)
+            # Вторая таблица (если есть) — синхронизируем так же
+            try:
+                _delete_ip_rows(cur, "greylisting_whitelist_domain_spf")
+                for sender in desired:
+                    _insert_whitelist_ip(cur, "greylisting_whitelist_domain_spf", sender)
+            except Exception:
+                pass
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return [a for a in _parse_whitelist_addresses(iredapd.list_greylisting_whitelists()) if _looks_like_ip(a)]
 
 
 def add_allowed_ip(ip: str) -> None:

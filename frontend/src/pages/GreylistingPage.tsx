@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, getUser, type GreylistingData, type GreylistingTiming } from '../api'
 import EntryList from '../components/EntryList'
 import { errorMessage } from '../errors'
@@ -16,19 +16,43 @@ function emptyTiming(): GreylistingTiming {
   }
 }
 
+function ipsToText(items: string[] | undefined): string {
+  return (items ?? []).join('\n')
+}
+
+function downloadTextFile(filename: string, text: string) {
+  const blob = new Blob([text.endsWith('\n') ? text : `${text}\n`], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export default function GreylistingPage() {
   const [grey, setGrey] = useState<GreylistingData | null>(null)
   const [greyToAddr, setGreyToAddr] = useState('')
   const [greyFromAddr, setGreyFromAddr] = useState('')
   const [greyWhitelistDomain, setGreyWhitelistDomain] = useState('')
-  const [allowedIp, setAllowedIp] = useState('')
+  const [allowedText, setAllowedText] = useState('')
+  const [spfText, setSpfText] = useState('')
   const [bannedIp, setBannedIp] = useState('')
   const [bannedComment, setBannedComment] = useState('')
   const [timingForm, setTimingForm] = useState<GreylistingTiming>(emptyTiming)
   const [greyBusy, setGreyBusy] = useState(false)
   const [loading, setLoading] = useState(true)
+  const allowedFileRef = useRef<HTMLInputElement>(null)
+  const spfFileRef = useRef<HTMLInputElement>(null)
   const role = getUser()?.role
   const canWrite = role === 'superadmin' || role === 'admin'
+
+  function syncTexts(data: GreylistingData) {
+    setAllowedText(ipsToText(data.allowed_ips))
+    setSpfText(ipsToText((data.whitelist_addresses ?? []).filter((x) => !x.startsWith('@'))))
+  }
 
   async function load() {
     setLoading(true)
@@ -36,6 +60,7 @@ export default function GreylistingPage() {
       const data = await api.greylisting()
       setGrey(data)
       if (data.timing) setTimingForm({ ...data.timing })
+      syncTexts(data)
     } catch (e) {
       notify.error(errorMessage(e))
       setGrey(null)
@@ -51,6 +76,7 @@ export default function GreylistingPage() {
       const data = await api.greylisting()
       setGrey(data)
       if (data.timing) setTimingForm({ ...data.timing })
+      syncTexts(data)
     } catch (e) {
       notify.error(errorMessage(e))
     }
@@ -63,6 +89,7 @@ export default function GreylistingPage() {
     }
     setGrey(overview)
     if (overview.timing) setTimingForm({ ...overview.timing })
+    syncTexts(overview)
   }
 
   async function runGreyAction(action: () => Promise<unknown>, success: string) {
@@ -166,17 +193,12 @@ export default function GreylistingPage() {
     )
   }
 
-  async function addAllowed() {
-    if (!allowedIp.trim()) {
-      notify.error('Укажите IP или CIDR')
-      return
-    }
+  async function saveAllowedText() {
     setGreyBusy(true)
     try {
-      const res = await api.greylistingAddAllowedIp(allowedIp.trim())
-      setAllowedIp('')
+      const res = await api.greylistingSetAllowedIps(allowedText)
       applyOverview(res.overview)
-      notify.success(`IP ${allowedIp.trim()} добавлен в разрешённые`)
+      notify.success(`Разрешённые IP сохранены (${res.items.length})`)
     } catch (e) {
       notify.error(errorMessage(e))
     } finally {
@@ -184,18 +206,32 @@ export default function GreylistingPage() {
     }
   }
 
-  async function removeAllowed(ip: string) {
-    if (!confirm(`Убрать ${ip} из разрешённых?`)) return
+  async function saveSpfText() {
+    if (!confirm('Заменить весь список IP из SPF/MX содержимым текстового поля?')) return
     setGreyBusy(true)
     try {
-      const res = await api.greylistingRemoveAllowedIp(ip)
+      const res = await api.greylistingSetWhitelistIps(spfText)
       applyOverview(res.overview)
-      notify.success('IP удалён из разрешённых')
+      notify.success(`Список SPF/MX IP сохранён (${res.items.length})`)
     } catch (e) {
       notify.error(errorMessage(e))
     } finally {
       setGreyBusy(false)
     }
+  }
+
+  function onPickTxt(
+    file: File | undefined,
+    setter: (text: string) => void,
+  ) {
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      setter(String(reader.result || ''))
+      notify.info(`Загружен файл ${file.name}`)
+    }
+    reader.onerror = () => notify.error('Не удалось прочитать файл')
+    reader.readAsText(file)
   }
 
   async function addBanned() {
@@ -249,8 +285,9 @@ export default function GreylistingPage() {
 
   if (loading) return <div>Загрузка...</div>
 
-  const allowedIps = grey?.allowed_ips ?? []
   const bannedIps = grey?.banned_ips ?? []
+  const allowedCount = allowedText.split(/\r?\n/).filter((l) => l.trim() && !l.trim().startsWith('#')).length
+  const spfCount = spfText.split(/\r?\n/).filter((l) => l.trim() && !l.trim().startsWith('#')).length
 
   return (
     <div>
@@ -363,24 +400,48 @@ export default function GreylistingPage() {
 
           <h4 style={{ marginTop: 24 }}>Разрешённые IP (обход greylist)</h4>
           <p className="muted">
-            С этих IP/сетей greylist не задерживает письма. Можно указать адрес или CIDR, например <code>192.168.1.10</code> или <code>10.0.0.0/24</code>.
+            Ручные исключения: один IP/CIDR на строку (как в .txt). Строки с <code>#</code> — комментарии.
+            Сейчас в поле: <strong>{allowedCount}</strong>.
           </p>
+          <textarea
+            className="log-box"
+            style={{ width: '100%', minHeight: 180, fontFamily: 'ui-monospace, Consolas, monospace', fontSize: '0.85rem' }}
+            value={allowedText}
+            readOnly={!canWrite}
+            onChange={(e) => setAllowedText(e.target.value)}
+            placeholder={'192.168.1.10\n10.0.0.0/24'}
+          />
           {canWrite && (
-            <div className="form-row">
+            <div className="form-row" style={{ marginTop: 8 }}>
+              <button disabled={greyBusy} onClick={saveAllowedText}>Сохранить список</button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={greyBusy}
+                onClick={() => downloadTextFile('greylist-allowed-ips.txt', allowedText)}
+              >
+                Скачать .txt
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={greyBusy}
+                onClick={() => allowedFileRef.current?.click()}
+              >
+                Загрузить .txt
+              </button>
               <input
-                placeholder="IP или CIDR"
-                value={allowedIp}
-                onChange={(e) => setAllowedIp(e.target.value)}
+                ref={allowedFileRef}
+                type="file"
+                accept=".txt,text/plain"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  onPickTxt(e.target.files?.[0], setAllowedText)
+                  e.target.value = ''
+                }}
               />
-              <button disabled={greyBusy} onClick={addAllowed}>Добавить</button>
             </div>
           )}
-          <EntryList
-            items={allowedIps}
-            canRemove={canWrite}
-            onRemove={removeAllowed}
-            emptyText="Разрешённых IP нет"
-          />
 
           <h4 style={{ marginTop: 24 }}>Забаненные IP (чёрный список)</h4>
           <p className="muted">
@@ -576,17 +637,74 @@ export default function GreylistingPage() {
                 emptyText="SPF-whitelist доменов нет"
               />
 
-              {(grey.whitelist_addresses?.length ?? 0) > 0 && (
-                <>
-                  <h4 style={{ marginTop: 20 }}>IP из SPF/MX (справочно)</h4>
-                  <p className="muted">
-                    Подтянуты автоматически ({grey.whitelist_addresses!.length}). Редактируйте нужные адреса в блоке «Разрешённые IP».
-                  </p>
-                  <div className="log-box" style={{ maxHeight: 160, overflow: 'auto' }}>
-                    {grey.whitelist_addresses!.join(', ')}
-                  </div>
-                </>
-              )}
+              <h4 style={{ marginTop: 20 }}>IP из SPF/MX</h4>
+              <p className="muted">
+                Большой список (сейчас <strong>{spfCount}</strong>): редактируйте как текстовый файл —
+                один IP/CIDR на строку. Можно скачать .txt, поправить в редакторе и загрузить обратно.
+                «Обновить IP из SPF» выше перезапишет список из DNS доменов whitelist.
+              </p>
+              <textarea
+                className="log-box"
+                style={{
+                  width: '100%',
+                  minHeight: 280,
+                  maxHeight: 480,
+                  fontFamily: 'ui-monospace, Consolas, monospace',
+                  fontSize: '0.85rem',
+                }}
+                value={spfText}
+                onChange={(e) => setSpfText(e.target.value)}
+                placeholder={'103.151.192.0/23\n104.43.243.237'}
+              />
+              <div className="form-row" style={{ marginTop: 8 }}>
+                <button disabled={greyBusy} onClick={saveSpfText}>Сохранить список</button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={greyBusy}
+                  onClick={() => downloadTextFile('greylist-spf-mx-ips.txt', spfText)}
+                >
+                  Скачать .txt
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={greyBusy}
+                  onClick={() => spfFileRef.current?.click()}
+                >
+                  Загрузить .txt
+                </button>
+                <input
+                  ref={spfFileRef}
+                  type="file"
+                  accept=".txt,text/plain"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    onPickTxt(e.target.files?.[0], setSpfText)
+                    e.target.value = ''
+                  }}
+                />
+              </div>
+            </>
+          )}
+
+          {!canWrite && spfText && (
+            <>
+              <h4 style={{ marginTop: 20 }}>IP из SPF/MX</h4>
+              <textarea
+                className="log-box"
+                style={{ width: '100%', minHeight: 280, fontFamily: 'ui-monospace, Consolas, monospace', fontSize: '0.85rem' }}
+                value={spfText}
+                readOnly
+              />
+              <button
+                type="button"
+                className="secondary"
+                style={{ marginTop: 8 }}
+                onClick={() => downloadTextFile('greylist-spf-mx-ips.txt', spfText)}
+              >
+                Скачать .txt
+              </button>
             </>
           )}
 

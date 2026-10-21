@@ -548,6 +548,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ ip }),
     }),
+  greylistingSetAllowedIps: (text: string) =>
+    request<{ ok: boolean; items: string[]; overview: GreylistingData }>('/api/greylisting/allowed-ips', {
+      method: 'PUT',
+      body: JSON.stringify({ text }),
+    }),
+  greylistingSetWhitelistIps: (text: string) =>
+    request<{ ok: boolean; items: string[]; overview: GreylistingData }>('/api/greylisting/whitelist-ips', {
+      method: 'PUT',
+      body: JSON.stringify({ text }),
+    }),
   quarantine: (content?: string, limit = 50, offset = 0) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
     if (content) params.set('content', content)

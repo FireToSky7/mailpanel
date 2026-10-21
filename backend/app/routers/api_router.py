@@ -22,6 +22,8 @@ from app.services.greylisting_ops import (
     greylisting_stats,
     remove_allowed_ip,
     remove_banned_ip,
+    set_allowed_ips,
+    set_whitelist_ips,
     update_greylisting_timing,
 )
 from app.services.postfix_queue import PostfixQueueError
@@ -182,6 +184,10 @@ class GreylistTimingUpdate(BaseModel):
 class GreylistIpRequest(BaseModel):
     ip: str = Field(min_length=3, max_length=80)
     comment: str = Field(default="", max_length=400)
+
+
+class GreylistIpListTextRequest(BaseModel):
+    text: str = Field(default="", max_length=2_000_000)
 
 
 class SpamUpdate(BaseModel):
@@ -804,6 +810,34 @@ def grey_remove_banned_ip(
         _audit(user, request, "banned_ip_remove", "greylisting", payload.ip.strip())
         return {"ok": True, "overview": get_greylisting_overview()}
     except (ValueError, iredapd.IredapdError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.put("/greylisting/allowed-ips", dependencies=[Depends(require_permission("greylisting.write"))])
+def grey_set_allowed_ips(
+    payload: GreylistIpListTextRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("greylisting.write")),
+):
+    try:
+        items = set_allowed_ips(payload.text)
+        _audit(user, request, "allowed_ips_set", "greylisting", f"count={len(items)}")
+        return {"ok": True, "items": items, "overview": get_greylisting_overview()}
+    except (ValueError, RuntimeError, iredapd.IredapdError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.put("/greylisting/whitelist-ips", dependencies=[Depends(require_permission("greylisting.write"))])
+def grey_set_whitelist_ips(
+    payload: GreylistIpListTextRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("greylisting.write")),
+):
+    try:
+        items = set_whitelist_ips(payload.text)
+        _audit(user, request, "whitelist_ips_set", "greylisting", f"count={len(items)}")
+        return {"ok": True, "items": items, "overview": get_greylisting_overview()}
+    except (ValueError, RuntimeError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
