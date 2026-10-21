@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, getUser, type GreylistingData, type GreylistingTiming } from '../api'
+import { api, getUser, type GreylistBlock, type GreylistingData, type GreylistingTiming } from '../api'
 import EntryList from '../components/EntryList'
 import { errorMessage } from '../errors'
 import { notify } from '../notify'
@@ -232,9 +232,31 @@ export default function GreylistingPage() {
     notify.info('Укажите получателя и нажмите «Отключить для пары»')
   }
 
+  async function excludeBlock(block: GreylistBlock) {
+    const label = block.sender || block.client_address || `#${block.id}`
+    if (!confirm(`Исключить ${label} из greylist?\nОтправитель/домен/IP больше не будут задерживаться, запись tracking удалится.`)) {
+      return
+    }
+    setGreyBusy(true)
+    try {
+      const res = await api.greylistingExclude({
+        id: block.id,
+        sender: block.sender || undefined,
+        client_address: block.client_address || undefined,
+      })
+      applyOverview(res.overview)
+      notify.success(`Исключено: ${label}`)
+    } catch (e) {
+      notify.error(errorMessage(e))
+    } finally {
+      setGreyBusy(false)
+    }
+  }
+
   if (loading) return <div>Загрузка...</div>
 
   const spfCount = spfText.split(/\r?\n/).filter((l) => l.trim() && !l.trim().startsWith('#')).length
+  const blocks = grey?.blocks ?? []
 
   return (
     <div>
@@ -345,11 +367,55 @@ export default function GreylistingPage() {
             </table>
           )}
 
-          <h4 style={{ marginTop: 24 }}>Статистика за {(grey.stats?.hours ?? 24)} ч</h4>
-          <p className="muted">Отклонений по логам: <strong>{grey.stats?.rejections ?? 0}</strong></p>
+          <h4 style={{ marginTop: 24 }}>Сейчас задержаны greylist</h4>
+          <p className="muted">
+            Живой список из БД iRedAPD (<code>greylisting_tracking</code>, ещё не прошли повтор).
+            «Исключить» — отключает greylist для отправителя/домена/IP и удаляет запись, чтобы письмо больше не ждало.
+            Отклонений по логам за {(grey.stats?.hours ?? 24)} ч: <strong>{grey.stats?.rejections ?? 0}</strong>.
+          </p>
+          {blocks.length === 0 ? (
+            <p className="muted">Активных задержек нет</p>
+          ) : (
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>От</th>
+                    <th>Кому</th>
+                    <th>IP</th>
+                    <th>Попыток</th>
+                    <th>С</th>
+                    <th>Ждать до</th>
+                    {canWrite && <th></th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {blocks.map((block) => (
+                    <tr key={block.id}>
+                      <td>{block.sender || '—'}</td>
+                      <td>{block.recipient || '—'}</td>
+                      <td><code>{block.client_address || '—'}</code></td>
+                      <td>{block.blocked_count}</td>
+                      <td className="muted">{(block.init_time || '—').replace('T', ' ').slice(0, 19)}</td>
+                      <td className="muted">{(block.block_expired || '—').replace('T', ' ').slice(0, 19)}</td>
+                      {canWrite && (
+                        <td className="actions">
+                          <button className="danger" disabled={greyBusy} onClick={() => excludeBlock(block)}>
+                            Исключить
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {(grey.stats?.top_senders?.length ?? 0) > 0 && (
             <>
-              <p className="muted">Чаще всего задерживались:</p>
+              <h4 style={{ marginTop: 20 }}>Чаще всего в логах за {(grey.stats?.hours ?? 24)} ч</h4>
+              <p className="muted">Справочно по journalctl (история). Для постоянного обхода — SPF-whitelist.</p>
               <ul>
                 {grey.stats!.top_senders.map((item) => (
                   <li key={item.address}>
@@ -361,37 +427,13 @@ export default function GreylistingPage() {
                         onClick={() => whitelistFromLog(item.address)}
                         disabled={greyBusy}
                       >
-                        В whitelist
+                        В SPF-whitelist
                       </button>
                     )}
                   </li>
                 ))}
               </ul>
             </>
-          )}
-          {(grey.stats?.recent?.length ?? 0) > 0 && (
-            <div className="table-scroll" style={{ marginTop: 12 }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Время</th>
-                    <th>От</th>
-                    <th>Кому</th>
-                    <th>IP</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {grey.stats!.recent.map((row, index) => (
-                    <tr key={`${row.logged_at}-${index}`}>
-                      <td>{row.logged_at}</td>
-                      <td>{row.mail_from || '—'}</td>
-                      <td>{row.mail_to || '—'}</td>
-                      <td>{row.client_ip || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
           )}
 
           <h4 style={{ marginTop: 20 }}>Правила greylisting</h4>

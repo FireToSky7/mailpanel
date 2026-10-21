@@ -223,6 +223,17 @@ export type GreylistingStats = {
   }[]
 }
 
+export type GreylistBlock = {
+  id: number
+  sender: string
+  recipient: string
+  client_address: string
+  sender_domain?: string
+  blocked_count: number
+  init_time?: string | null
+  block_expired?: string | null
+}
+
 export type GreylistingData = {
   global_enabled: boolean
   timing: GreylistingTiming
@@ -230,6 +241,7 @@ export type GreylistingData = {
   whitelist_domains: string[]
   whitelist_addresses: string[]
   stats: GreylistingStats
+  blocks?: GreylistBlock[]
   notes: string[]
 }
 
@@ -526,6 +538,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ text }),
     }),
+  greylistingExclude: (body: { id?: number; sender?: string; client_address?: string }) =>
+    request<{ ok: boolean; overview: GreylistingData; disabled?: string[]; deleted_tracking?: number }>(
+      '/api/greylisting/exclude',
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
   quarantine: (content?: string, limit = 50, offset = 0) => {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
     if (content) params.set('content', content)

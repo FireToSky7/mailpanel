@@ -592,31 +592,145 @@ def _delete_greylist_whitelist_sender(sender: str) -> bool:
     return removed
 
 
-def list_banned_ips() -> list[dict[str, str]]:
-    entries = iredapd.list_wblist("blacklist")
-    result: list[dict[str, str]] = []
-    for item in entries:
-        address = str(item.get("address") or item.get("email") or "").strip().lower()
-        if not address or not _looks_like_ip(address):
-            continue
+def _iredapd_connect():
+    cfg = _read_iredapd_db_settings()
+    if not cfg:
+        raise RuntimeError("Не удалось прочитать параметры БД iRedAPD из settings.py")
+    return pymysql.connect(
+        host=str(cfg["host"]),
+        port=int(cfg["port"]),
+        user=str(cfg["user"]),
+        password=str(cfg["password"]),
+        database=str(cfg["database"]),
+        charset="utf8mb4",
+        cursorclass=DictCursor,
+        autocommit=True,
+    )
+
+
+def list_greylist_blocks(limit: int = 200) -> list[dict[str, Any]]:
+    """Активные записи greylisting_tracking (ещё не прошли повторную доставку)."""
+    limit = max(1, min(int(limit), 500))
+    try:
+        conn = _iredapd_connect()
+    except Exception:
+        return []
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, sender, recipient, client_address, sender_domain, rcpt_domain, "
+                "blocked_count, init_time, block_expired, passed "
+                "FROM greylisting_tracking "
+                "WHERE passed = 0 "
+                "ORDER BY blocked_count DESC, init_time DESC "
+                "LIMIT %s",
+                (limit,),
+            )
+            rows = list(cur.fetchall() or [])
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        init_ts = int(row.get("init_time") or 0)
+        block_ts = int(row.get("block_expired") or 0)
         result.append(
             {
-                "address": address,
-                "comment": str(item.get("comment") or ""),
+                "id": int(row["id"]),
+                "sender": str(row.get("sender") or "").strip().lower(),
+                "recipient": str(row.get("recipient") or "").strip().lower(),
+                "client_address": str(row.get("client_address") or "").strip(),
+                "sender_domain": str(row.get("sender_domain") or "").strip().lower(),
+                "blocked_count": int(row.get("blocked_count") or 0),
+                "init_time": datetime.fromtimestamp(init_ts).isoformat(timespec="seconds") if init_ts else None,
+                "block_expired": datetime.fromtimestamp(block_ts).isoformat(timespec="seconds") if block_ts else None,
             }
         )
-    result.sort(key=lambda row: row["address"])
     return result
 
 
-def add_banned_ip(ip: str, comment: str = "") -> None:
-    value = normalize_ip_or_cidr(ip)
-    iredapd.add_wblist("blacklist", [value], None, comment=comment or None)
+def exclude_greylist_block(
+    tracking_id: int | None = None,
+    sender: str | None = None,
+    client_address: str | None = None,
+) -> dict[str, Any]:
+    """Исключить отправителя/IP из greylist: правило disable + удаление tracking."""
+    sender = (sender or "").strip().lower() or None
+    client_address = (client_address or "").strip() or None
+    row: dict[str, Any] | None = None
 
+    disabled: list[str] = []
+    deleted = 0
+    conn = _iredapd_connect()
+    try:
+        with conn.cursor() as cur:
+            if tracking_id is not None:
+                cur.execute(
+                    "SELECT id, sender, recipient, client_address, sender_domain "
+                    "FROM greylisting_tracking WHERE id = %s LIMIT 1",
+                    (int(tracking_id),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise ValueError(f"Запись tracking id={tracking_id} не найдена")
+                sender = str(row.get("sender") or "").strip().lower() or sender
+                client_address = str(row.get("client_address") or "").strip() or client_address
 
-def remove_banned_ip(ip: str) -> None:
-    value = normalize_ip_or_cidr(ip)
-    iredapd.delete_wblist("blacklist", [value], None)
+            if not sender and not client_address:
+                raise ValueError("Укажите отправителя или IP")
+
+            disable_targets: list[str] = []
+            if sender and "@" in sender and not sender.startswith("@"):
+                disable_targets.append(sender)
+                domain = sender.split("@", 1)[1]
+                if domain:
+                    disable_targets.append(f"@{domain}")
+            elif sender:
+                disable_targets.append(sender)
+            if client_address and client_address not in disable_targets:
+                disable_targets.append(client_address)
+
+            for target in disable_targets:
+                try:
+                    iredapd.greylisting_disable("@.", target)
+                    disabled.append(target)
+                except Exception:
+                    continue
+
+            if client_address and _looks_like_ip(client_address):
+                try:
+                    cur.execute(
+                        "INSERT IGNORE INTO greylisting_whitelists (account, sender, comment) "
+                        "VALUES (%s, %s, %s)",
+                        ("@.", client_address, "mailpanel-exclude"),
+                    )
+                except Exception:
+                    pass
+
+            if tracking_id is not None:
+                cur.execute("DELETE FROM greylisting_tracking WHERE id = %s", (int(tracking_id),))
+                deleted += int(cur.rowcount or 0)
+            if sender:
+                cur.execute("DELETE FROM greylisting_tracking WHERE LOWER(sender) = LOWER(%s)", (sender,))
+                deleted += int(cur.rowcount or 0)
+            if client_address:
+                cur.execute(
+                    "DELETE FROM greylisting_tracking WHERE client_address = %s",
+                    (client_address,),
+                )
+                deleted += int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+    return {
+        "ok": True,
+        "disabled": disabled,
+        "deleted_tracking": deleted,
+        "sender": sender,
+        "client_address": client_address,
+    }
 
 
 def get_greylisting_overview() -> dict[str, Any]:
@@ -636,6 +750,10 @@ def get_greylisting_overview() -> dict[str, Any]:
             "top_senders": [],
             "recent": [],
         }
+    try:
+        blocks = list_greylist_blocks()
+    except Exception:
+        blocks = []
     return {
         "global_enabled": _infer_global_enabled(rules),
         "timing": timing,
@@ -643,6 +761,7 @@ def get_greylisting_overview() -> dict[str, Any]:
         "whitelist_domains": whitelist_domains,
         "whitelist_addresses": whitelist_addresses,
         "stats": stats,
+        "blocks": blocks,
         "raw": {
             "settings": settings_raw,
             "whitelist_domains": domains_raw,
@@ -650,7 +769,7 @@ def get_greylisting_overview() -> dict[str, Any]:
         },
         "notes": [
             "Greylisting откладывает первую попытку доставки; легитимные серверы повторяют отправку.",
-            "Обход задержки — через SPF-whitelist доменов и список IP из SPF/MX (не через белый список «Антиспам»).",
+            "Обход задержки — SPF-whitelist или кнопка «Исключить» у записи в списке отклонений.",
             f"Повторная доставка разрешена не ранее чем через {timing['block_expire_minutes']} мин.",
             f"Успешные отправители запоминаются на {timing['auth_triplet_expire_days']} дн.",
         ],

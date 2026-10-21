@@ -16,6 +16,7 @@ from app.services.fail2ban_ops import Fail2banError
 from app.services.iredapd import IredapdError
 from app.services import iredapd, postfix_diagnostics, postfix_queue, quarantine_ops
 from app.services.greylisting_ops import (
+    exclude_greylist_block,
     get_greylisting_overview,
     greylisting_stats,
     set_whitelist_ips,
@@ -178,6 +179,12 @@ class GreylistTimingUpdate(BaseModel):
 
 class GreylistIpListTextRequest(BaseModel):
     text: str = Field(default="", max_length=2_000_000)
+
+
+class GreylistExcludeRequest(BaseModel):
+    id: int | None = None
+    sender: str | None = None
+    client_address: str | None = None
 
 
 class SpamUpdate(BaseModel):
@@ -759,6 +766,27 @@ def grey_set_whitelist_ips(
         return {"ok": True, "items": items, "overview": get_greylisting_overview()}
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/greylisting/exclude", dependencies=[Depends(require_permission("greylisting.write"))])
+def grey_exclude_block(
+    payload: GreylistExcludeRequest,
+    request: Request,
+    user: PanelUser = Depends(require_permission("greylisting.write")),
+):
+    try:
+        result = exclude_greylist_block(
+            tracking_id=payload.id,
+            sender=payload.sender,
+            client_address=payload.client_address,
+        )
+        detail = result.get("sender") or result.get("client_address") or str(payload.id)
+        _audit(user, request, "exclude", "greylisting", str(detail))
+        return {"ok": True, **result, "overview": get_greylisting_overview()}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc
 
 
 @router.get("/spam", dependencies=[Depends(require_permission("antispam.read"))])
