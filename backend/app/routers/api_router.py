@@ -128,11 +128,17 @@ class GroupDomainOnlyUpdate(BaseModel):
 
 class ForwardingUpdate(BaseModel):
     goto: str
+    keep_copy: bool = True
 
 
 class ForwardingRemove(BaseModel):
     address: str
     goto: str
+
+
+class ForwardingKeepCopyUpdate(BaseModel):
+    address: str
+    keep_copy: bool
 
 
 class WblistRequest(BaseModel):
@@ -292,7 +298,11 @@ def mailbox_name(username: str, payload: MailboxNameUpdate, request: Request, us
 @router.get("/mailboxes/{username:path}/forwarding", dependencies=[Depends(require_permission("mail.read"))])
 def get_mailbox_forwarding(username: str):
     address = username.lower()
-    return {"address": address, "goto": mail_ops.get_forwarding(address)}
+    return {
+        "address": address,
+        "goto": mail_ops.get_forwarding(address),
+        "keep_copy": mail_ops.get_forwarding_keep_copy(address),
+    }
 
 
 @router.put("/mailboxes/{username:path}/forwarding", dependencies=[Depends(require_permission("mail.write"))])
@@ -307,8 +317,9 @@ def put_mailbox_forwarding(
     try:
         if not mail_ops.mailbox_exists(address):
             raise ValueError(f"Ящик не найден: {address}")
-        mail_ops.set_forwarding(address, goto)
-        _audit(user, request, "forwarding_set", "mailbox", f"{address} -> {goto}")
+        mail_ops.set_forwarding(address, goto, keep_copy=payload.keep_copy)
+        keep_label = "keep" if payload.keep_copy else "forward-only"
+        _audit(user, request, "forwarding_set", "mailbox", f"{address} -> {goto} ({keep_label})")
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True}
@@ -355,6 +366,30 @@ def remove_forwarding_entry(
             raise ValueError(f"Ящик не найден: {address}")
         mail_ops.remove_forwarding(address, goto)
         _audit(user, request, "forwarding_remove", "mailbox", f"{address} -> {goto}")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    items = mail_ops.list_mailbox_forwardings(get_config().panel.mail_domain)
+    return {"ok": True, "items": items}
+
+
+@router.post("/forwardings/keep-copy", dependencies=[Depends(require_permission("mail.write"))])
+def set_forwarding_keep_copy(
+    payload: ForwardingKeepCopyUpdate,
+    request: Request,
+    user: PanelUser = Depends(require_permission("mail.write")),
+):
+    address = normalize_email(payload.address, "Ящик")
+    try:
+        if not mail_ops.mailbox_exists(address):
+            raise ValueError(f"Ящик не найден: {address}")
+        mail_ops.set_forwarding_keep_copy(address, payload.keep_copy)
+        _audit(
+            user,
+            request,
+            "forwarding_keep_copy",
+            "mailbox",
+            f"{address} keep_copy={payload.keep_copy}",
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     items = mail_ops.list_mailbox_forwardings(get_config().panel.mail_domain)

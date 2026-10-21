@@ -317,26 +317,22 @@ def delete_alias(address: str) -> None:
         execute(conn, "DELETE FROM alias WHERE address = %s", (address,))
 
 
-def _ensure_self_forwarding(conn, username: str) -> None:
-    domain = _dest_domain(username)
-    row = fetch_one(
-        conn,
-        "SELECT forwarding FROM forwardings WHERE address = %s AND LOWER(forwarding) = LOWER(%s) LIMIT 1",
-        (username, username),
-    )
-    if not row:
-        execute(
-            conn,
-            "INSERT INTO forwardings (address, forwarding, domain, dest_domain, is_forwarding, active) "
-            "VALUES (%s, %s, %s, %s, 1, 1)",
-            (username, username, domain, domain),
-        )
-
-
 def _forward_value(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace").strip().lower()
     return str(value).strip().lower()
+
+
+def _has_keep_copy(conn, username: str) -> bool:
+    """True, если есть self-forward (письмо остаётся в ящике при пересылке)."""
+    username = username.lower()
+    row = fetch_one(
+        conn,
+        "SELECT forwarding FROM forwardings "
+        "WHERE LOWER(address) = LOWER(%s) AND LOWER(TRIM(forwarding)) = LOWER(%s) LIMIT 1",
+        (username, username),
+    )
+    return row is not None
 
 
 def _read_forwarding_targets(conn, username: str) -> list[str]:
@@ -354,7 +350,12 @@ def _read_forwarding_targets(conn, username: str) -> list[str]:
     return sorted(targets)
 
 
-def _write_forwarding_targets(conn, username: str, targets: list[str]) -> None:
+def _write_forwarding_targets(conn, username: str, targets: list[str], keep_copy: bool = True) -> None:
+    """Пишет внешние пересылки. keep_copy=True → также self-forward (копия в ящике).
+
+    Если внешних целей нет, self-forward всегда пишется — иначе ящик перестанет
+    принимать почту (модель iRedMail: доставка через forwardings).
+    """
     username = username.lower()
     clean_targets = sorted(
         {
@@ -365,12 +366,15 @@ def _write_forwarding_targets(conn, username: str, targets: list[str]) -> None:
     )
     domain = _dest_domain(username)
     execute(conn, "DELETE FROM forwardings WHERE LOWER(address) = LOWER(%s)", (username,))
-    execute(
-        conn,
-        "INSERT INTO forwardings (address, forwarding, domain, dest_domain, is_forwarding, active) "
-        "VALUES (%s, %s, %s, %s, 1, 1)",
-        (username, username, domain, domain),
-    )
+    # Без внешних пересылок локальная доставка обязательна.
+    write_self = keep_copy or not clean_targets
+    if write_self:
+        execute(
+            conn,
+            "INSERT INTO forwardings (address, forwarding, domain, dest_domain, is_forwarding, active) "
+            "VALUES (%s, %s, %s, %s, 1, 1)",
+            (username, username, domain, domain),
+        )
     for target in clean_targets:
         execute(
             conn,
@@ -386,7 +390,12 @@ def _mailbox_forward_targets(conn, username: str) -> list[str]:
 
 def list_mailbox_forwardings(domain: str | None = None) -> list[dict[str, Any]]:
     query = (
-        "SELECT m.username AS address, f.forwarding AS goto "
+        "SELECT m.username AS address, f.forwarding AS goto, "
+        "EXISTS("
+        "  SELECT 1 FROM forwardings s "
+        "  WHERE LOWER(s.address) = LOWER(m.username) "
+        "  AND LOWER(TRIM(s.forwarding)) = LOWER(TRIM(m.username))"
+        ") AS keep_copy "
         "FROM mailbox m "
         "JOIN forwardings f ON LOWER(f.address) = LOWER(m.username) "
         "AND LOWER(TRIM(f.forwarding)) != LOWER(TRIM(m.username)) "
@@ -406,7 +415,14 @@ def list_mailbox_forwardings(domain: str | None = None) -> list[dict[str, Any]]:
             address = address.decode("utf-8", errors="replace")
         if isinstance(goto, bytes):
             goto = goto.decode("utf-8", errors="replace")
-        result.append({"address": str(address).strip(), "goto": str(goto).strip()})
+        keep = row.get("keep_copy")
+        result.append(
+            {
+                "address": str(address).strip(),
+                "goto": str(goto).strip(),
+                "keep_copy": bool(keep),
+            }
+        )
     return result
 
 
@@ -417,6 +433,26 @@ def get_forwarding(username: str) -> str | None:
     if not targets:
         return None
     return ", ".join(targets)
+
+
+def get_forwarding_keep_copy(username: str) -> bool:
+    username = username.lower()
+    with vmail_conn() as conn:
+        return _has_keep_copy(conn, username)
+
+
+def set_forwarding_keep_copy(username: str, keep_copy: bool) -> None:
+    """Включает/выключает сохранение копии в ящике при пересылке."""
+    username = username.lower()
+    with vmail_conn() as conn:
+        if not fetch_one(conn, "SELECT username FROM mailbox WHERE username = %s", (username,)):
+            raise ValueError(f"Ящик не найден: {username}")
+        targets = _read_forwarding_targets(conn, username)
+        if not targets:
+            # Нечего пересылать — оставляем обычную локальную доставку.
+            _write_forwarding_targets(conn, username, [], keep_copy=True)
+            return
+        _write_forwarding_targets(conn, username, targets, keep_copy=keep_copy)
 
 
 def _check_forward_loop(conn, username: str, goto: str) -> None:
@@ -439,7 +475,7 @@ def _check_forward_loop(conn, username: str, goto: str) -> None:
         pending.extend(_read_forwarding_targets(conn, current))
 
 
-def add_forwarding(username: str, goto: str) -> None:
+def add_forwarding(username: str, goto: str, keep_copy: bool = True) -> None:
     username = username.lower()
     goto = goto.lower().strip()
     if username == goto:
@@ -452,12 +488,12 @@ def add_forwarding(username: str, goto: str) -> None:
             raise ValueError(f"Пересылка на {goto} уже настроена")
         _check_forward_loop(conn, username, goto)
         targets.append(goto)
-        _write_forwarding_targets(conn, username, targets)
+        _write_forwarding_targets(conn, username, targets, keep_copy=keep_copy)
 
 
-def set_forwarding(username: str, goto: str) -> None:
+def set_forwarding(username: str, goto: str, keep_copy: bool = True) -> None:
     """Добавляет адрес пересылки, не удаляя существующие."""
-    add_forwarding(username, goto)
+    add_forwarding(username, goto, keep_copy=keep_copy)
 
 
 def remove_forwarding(username: str, goto: str) -> None:
@@ -467,13 +503,16 @@ def remove_forwarding(username: str, goto: str) -> None:
         targets = _read_forwarding_targets(conn, username)
         if goto not in targets:
             return
-        _write_forwarding_targets(conn, username, [t for t in targets if t != goto])
+        keep = _has_keep_copy(conn, username)
+        remaining = [t for t in targets if t != goto]
+        # Без внешних целей всегда восстанавливаем локальную доставку.
+        _write_forwarding_targets(conn, username, remaining, keep_copy=keep if remaining else True)
 
 
 def clear_forwarding(username: str) -> None:
     username = username.lower()
     with vmail_conn() as conn:
-        _write_forwarding_targets(conn, username, [])
+        _write_forwarding_targets(conn, username, [], keep_copy=True)
 
 
 def dashboard_stats() -> dict[str, Any]:

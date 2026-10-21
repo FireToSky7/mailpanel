@@ -27,6 +27,7 @@ export type Mailbox = {
 export type ForwardingEntry = {
   address: string
   goto: string
+  keep_copy: boolean
 }
 
 export type Alias = {
@@ -191,6 +192,7 @@ export type DashboardData = {
 export type ForwardingInfo = {
   address: string
   goto: string | null
+  keep_copy?: boolean
 }
 
 export type GreylistingRule = {
@@ -372,10 +374,10 @@ export const api = {
     }),
   mailboxForwarding: (username: string) =>
     request<ForwardingInfo>(`/api/mailboxes/${encodeURIComponent(username)}/forwarding`),
-  setMailboxForwarding: (username: string, goto: string) =>
+  setMailboxForwarding: (username: string, goto: string, keep_copy = true) =>
     request<{ ok: boolean }>(`/api/mailboxes/${encodeURIComponent(username)}/forwarding`, {
       method: 'PUT',
-      body: JSON.stringify({ goto }),
+      body: JSON.stringify({ goto, keep_copy }),
     }),
   clearMailboxForwarding: (username: string, goto?: string) => {
     const query = goto ? `?goto=${encodeURIComponent(goto)}` : ''
@@ -389,6 +391,11 @@ export const api = {
     request<{ ok: boolean; items: ForwardingEntry[] }>('/api/forwardings/remove', {
       method: 'POST',
       body: JSON.stringify({ address, goto }),
+    }),
+  setForwardingKeepCopy: (address: string, keep_copy: boolean) =>
+    request<{ ok: boolean; items: ForwardingEntry[] }>('/api/forwardings/keep-copy', {
+      method: 'POST',
+      body: JSON.stringify({ address, keep_copy }),
     }),
   aliases: () => request<Alias[]>('/api/aliases'),
   createAlias: (body: object) => request<{ ok: boolean }>('/api/aliases', { method: 'POST', body: JSON.stringify(body) }),

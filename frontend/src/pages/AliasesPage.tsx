@@ -11,6 +11,8 @@ export default function AliasesPage() {
   const [goto, setGoto] = useState('')
   const [fwdMailbox, setFwdMailbox] = useState('')
   const [fwdTarget, setFwdTarget] = useState('')
+  const [fwdKeepCopy, setFwdKeepCopy] = useState(true)
+  const [busyKeep, setBusyKeep] = useState<string | null>(null)
   const role = getUser()?.role
   const canWrite = role === 'superadmin' || role === 'admin'
 
@@ -73,9 +75,13 @@ export default function AliasesPage() {
     }
     const target = fwdTarget.trim()
     try {
-      await api.setMailboxForwarding(fwdMailbox, target)
+      await api.setMailboxForwarding(fwdMailbox, target, fwdKeepCopy)
       setFwdTarget('')
-      notify.success(`Добавлена пересылка: ${fwdMailbox} → ${target}`)
+      notify.success(
+        fwdKeepCopy
+          ? `Добавлена пересылка с копией в ящике: ${fwdMailbox} → ${target}`
+          : `Добавлена пересылка без копии: ${fwdMailbox} → ${target}`,
+      )
       setForwardings(await api.forwardings())
     } catch (e) {
       notify.error(errorMessage(e))
@@ -90,6 +96,23 @@ export default function AliasesPage() {
       notify.success('Пересылка отключена')
     } catch (e) {
       notify.error(errorMessage(e))
+    }
+  }
+
+  async function toggleKeepCopy(address: string, keep_copy: boolean) {
+    setBusyKeep(address)
+    try {
+      const res = await api.setForwardingKeepCopy(address, keep_copy)
+      setForwardings(res.items)
+      notify.success(
+        keep_copy
+          ? `Копия в ящике ${address} включена`
+          : `Копия в ящике ${address} выключена — только пересылка`,
+      )
+    } catch (e) {
+      notify.error(errorMessage(e))
+    } finally {
+      setBusyKeep(null)
     }
   }
 
@@ -128,34 +151,70 @@ export default function AliasesPage() {
       <div className="card">
         <h3>Пересылка ящиков</h3>
         <p className="muted">
-          Можно добавить несколько адресов пересылки для одного ящика. Оригинал остаётся в ящике.
-          Нельзя настраивать пересылку по кругу (u1 → u2 и u2 → u1) — письма не дойдут до получателя.
+          Можно добавить несколько адресов пересылки для одного ящика.
+          Чекбокс «Оставлять копию» — письмо приходит и в исходный ящик, и на адрес пересылки.
+          Без галочки письмо только пересылается (в исходном ящике не остаётся).
+          Нельзя настраивать пересылку по кругу (u1 → u2 и u2 → u1).
         </p>
         {canWrite && (
-          <div className="form-row" style={{ marginBottom: 16 }}>
-            <select value={fwdMailbox} onChange={(e) => setFwdMailbox(e.target.value)}>
-              {mailboxes.map((m) => (
-                <option key={m.username} value={m.username}>{m.username}</option>
-              ))}
-            </select>
-            <input
-              placeholder="куда пересылать (user@domain.ru)"
-              value={fwdTarget}
-              onChange={(e) => setFwdTarget(e.target.value)}
-            />
-            <button onClick={addForwarding}>Добавить</button>
-          </div>
+          <>
+            <div className="form-row" style={{ marginBottom: 8 }}>
+              <select value={fwdMailbox} onChange={(e) => setFwdMailbox(e.target.value)}>
+                {mailboxes.map((m) => (
+                  <option key={m.username} value={m.username}>{m.username}</option>
+                ))}
+              </select>
+              <input
+                placeholder="куда пересылать (user@domain.ru)"
+                value={fwdTarget}
+                onChange={(e) => setFwdTarget(e.target.value)}
+              />
+              <button onClick={addForwarding}>Добавить</button>
+            </div>
+            <label className="check-label" style={{ marginBottom: 16, display: 'inline-flex' }}>
+              <input
+                type="checkbox"
+                checked={fwdKeepCopy}
+                onChange={(e) => setFwdKeepCopy(e.target.checked)}
+              />
+              Оставлять копию в ящике исходного адресата
+            </label>
+          </>
         )}
         <table>
-          <thead><tr><th>Ящик</th><th>Пересылка на</th>{canWrite && <th></th>}</tr></thead>
+          <thead>
+            <tr>
+              <th>Ящик</th>
+              <th>Пересылка на</th>
+              <th>Копия в ящике</th>
+              {canWrite && <th></th>}
+            </tr>
+          </thead>
           <tbody>
             {forwardings.length === 0 && (
-              <tr><td colSpan={canWrite ? 3 : 2} className="muted">Пересылка не настроена</td></tr>
+              <tr>
+                <td colSpan={canWrite ? 4 : 3} className="muted">Пересылка не настроена</td>
+              </tr>
             )}
             {forwardings.map((f) => (
               <tr key={`${f.address}:${f.goto}`}>
                 <td>{f.address}</td>
                 <td>{f.goto}</td>
+                <td>
+                  {canWrite ? (
+                    <label className="check-label">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(f.keep_copy)}
+                        disabled={busyKeep === f.address}
+                        onChange={(e) => toggleKeepCopy(f.address, e.target.checked)}
+                      />
+                      {f.keep_copy ? 'Да' : 'Нет'}
+                    </label>
+                  ) : (
+                    f.keep_copy ? 'Да' : 'Нет'
+                  )}
+                </td>
                 {canWrite && (
                   <td className="actions">
                     <button className="danger" onClick={() => removeForwarding(f.address, f.goto)}>Отключить</button>

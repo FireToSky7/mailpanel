@@ -55,6 +55,23 @@ button.danger { background: #b91c1c; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 .form-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .form-row > * { flex: 1; min-width: 160px; }
+.check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: #c5d0de;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.check-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #3b82f6;
+  cursor: pointer;
+  flex-shrink: 0;
+}
 .login-page {
   min-height: 100vh; display: flex; align-items: center; justify-content: center;
   background: radial-gradient(circle at top, #1e3a5f, #0f1419 55%);
