@@ -121,25 +121,26 @@ extract_cf_pass() {
   local f user="" pass=""
   for f in "$@"; do
     [[ -f "$f" ]] || continue
-    user="$(awk -F= '/^user[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$f")"
-    pass="$(awk -F= '/^password[[:space:]]*=/{sub(/^[^=]*=[[:space:]]*/,""); print; exit}' "$f")"
+    user="$(awk -F= '/^user[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$f" || true)"
+    pass="$(awk -F= '/^password[[:space:]]*=/{sub(/^[^=]*=[[:space:]]*/,""); print; exit}' "$f" || true)"
     if [[ -n "$user" && -n "$pass" ]]; then
       append_cred "$name" "$user" "$pass"
       return 0
     fi
   done
+  return 0
 }
 
 extract_cf_pass POSTFIX_VMAIL \
   /etc/postfix/mysql/virtual_mailbox_maps.cf \
   /etc/postfix/pgsql/virtual_mailbox_maps.cf \
-  /etc/postfix/mysql_virtual_mailbox_maps.cf
+  /etc/postfix/mysql_virtual_mailbox_maps.cf || true
 
-# iredapd settings.py
+# iredapd settings.py (grep без совпадения + pipefail иначе валит весь скрипт)
 if [[ -f /opt/iredapd/settings.py ]]; then
-  iu="$(grep -E "^\s*iredapd_db_user\s*=" /opt/iredapd/settings.py 2>/dev/null | tail -1 | sed -E "s/.*=\s*['\"]([^'\"]+).*/\1/")"
-  ipw="$(grep -E "^\s*iredapd_db_password\s*=" /opt/iredapd/settings.py 2>/dev/null | tail -1 | sed -E "s/.*=\s*['\"]([^'\"]+).*/\1/")"
-  append_cred IREDAPD "${iu:-iredapd}" "$ipw" "iredapd"
+  iu="$(grep -E "^\s*iredapd_db_user\s*=" /opt/iredapd/settings.py 2>/dev/null | tail -1 | sed -E "s/.*=\s*['\"]([^'\"]+).*/\1/" || true)"
+  ipw="$(grep -E "^\s*iredapd_db_password\s*=" /opt/iredapd/settings.py 2>/dev/null | tail -1 | sed -E "s/.*=\s*['\"]([^'\"]+).*/\1/" || true)"
+  append_cred IREDAPD "${iu:-iredapd}" "$ipw" "iredapd" || true
 fi
 
 # roundcube
@@ -148,9 +149,9 @@ for rc in /opt/www/roundcubemail/config/config.inc.php \
           /usr/share/roundcubemail/config/config.inc.php; do
   if [[ -f "$rc" ]]; then
     # db_dsnw = 'mysql://user:pass@host/db'
-    dsn="$(grep -E "db_dsnw" "$rc" | head -1 || true)"
+    dsn="$(grep -E "db_dsnw" "$rc" 2>/dev/null | head -1 || true)"
     if [[ "$dsn" =~ mysql://([^:]+):([^@]+)@[^/]+/([a-zA-Z0-9_]+) ]]; then
-      append_cred ROUNDCUBE "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+      append_cred ROUNDCUBE "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" || true
     fi
     break
   fi
@@ -188,11 +189,10 @@ get_env() { grep -E "^${1}=" "$PASS_ENV" 2>/dev/null | head -1 | cut -d= -f2- ||
 add_mysql_user_sql "$(get_env VMAIL_USER)" "$(get_env VMAIL_PASSWORD)" "$(get_env VMAIL_DATABASE)" "ALL PRIVILEGES"
 # vmailadmin часто нужен для управления
 if mysql "${mysql_args[@]}" -Nse "SELECT User FROM mysql.user WHERE User='vmailadmin' AND Host='localhost'" 2>/dev/null | grep -qx vmailadmin; then
-  # пароль vmailadmin из tips, если есть
   va_pass="$(grep -i 'Username:\s*vmailadmin' -A2 /root/iRedMail.tips 2>/dev/null | grep -i password | head -1 | awk '{print $NF}' || true)"
   [[ -z "$va_pass" ]] && va_pass="$(get_env VMAIL_PASSWORD)"
   add_mysql_user_sql "vmailadmin" "$va_pass" "vmail" "ALL PRIVILEGES"
-fi
+fi || true
 add_mysql_user_sql "$(get_env AMAVISD_USER)" "$(get_env AMAVISD_PASSWORD)" "$(get_env AMAVISD_DATABASE)" "ALL PRIVILEGES"
 add_mysql_user_sql "$(get_env IREDAPD_USER)" "$(get_env IREDAPD_PASSWORD)" "$(get_env IREDAPD_DATABASE)" "ALL PRIVILEGES"
 add_mysql_user_sql "$(get_env ROUNDCUBE_USER)" "$(get_env ROUNDCUBE_PASSWORD)" "$(get_env ROUNDCUBE_DATABASE)" "ALL PRIVILEGES"
