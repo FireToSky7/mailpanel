@@ -300,8 +300,10 @@ uname -a >"${DEST}/meta/uname.txt" 2>/dev/null || true
 
 cat >"${DEST}/meta/RESTORE.txt" <<'EOF'
 На новой ВМ: РЕД ОС 8 + iRedMail 1.7.4 MARIADB, затем:
+  sudo bash /opt/mailpanel/scripts/mailpanel-restore.sh /path/to/STAMP.tgz
+  # или каталог:
   sudo bash /opt/mailpanel/scripts/mailpanel-restore.sh /path/to/STAMP
-Ввести YES. Скрипт сам поднимет MySQL-users, venv, php-fpm, amavis, clamav, SA rules.
+Ввести YES.
 EOF
 
 ( cd "$DEST" && find . -type f ! -name 'SHA256SUMS' -print0 | sort -z | xargs -0 sha256sum ) \
@@ -309,11 +311,27 @@ EOF
 
 touch "${DEST}/COMPLETE"
 
+echo "==> Архив .tgz (для переноса на флешку / scp)"
+ARCHIVE="${BACKUP_ROOT}/${STAMP}.tgz"
+tar -C "$BACKUP_ROOT" -czf "$ARCHIVE" "$STAMP"
+chmod 600 "$ARCHIVE" 2>/dev/null || true
+# по умолчанию каталог оставляем; удалить: MAILPANEL_BACKUP_REMOVE_DIR=1
+if [[ "${MAILPANEL_BACKUP_REMOVE_DIR:-0}" == "1" ]]; then
+  echo "  удаляем распакованный каталог (остаётся только .tgz)"
+  rm -rf "$DEST"
+fi
+
 echo "==> Ротация: старше ${KEEP_DAYS} дн."
 find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name "$STAMP" -mtime "+${KEEP_DAYS}" \
   -exec rm -rf {} + 2>/dev/null || true
+find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type f \( -name '*.tgz' -o -name '*.tar.gz' \) \
+  ! -name "${STAMP}.tgz" -mtime "+${KEEP_DAYS}" -delete 2>/dev/null || true
 
-SIZE="$(du -sh "$DEST" | awk '{print $1}')"
+SIZE_DIR="$(du -sh "${BACKUP_ROOT}/${STAMP}" 2>/dev/null | awk '{print $1}' || echo '-')"
+SIZE_TGZ="$(du -sh "$ARCHIVE" 2>/dev/null | awk '{print $1}' || echo '-')"
 echo ""
-echo "Готово: $DEST  ($SIZE)"
-echo "  sudo bash /opt/mailpanel/scripts/mailpanel-restore.sh $DEST"
+echo "Готово:"
+echo "  каталог: $BACKUP_ROOT/$STAMP  ($SIZE_DIR)"
+echo "  архив:   $ARCHIVE  ($SIZE_TGZ)"
+echo "Восстановление:"
+echo "  sudo bash /opt/mailpanel/scripts/mailpanel-restore.sh $ARCHIVE"

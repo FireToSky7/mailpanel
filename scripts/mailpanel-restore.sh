@@ -3,43 +3,84 @@
 # Восстановление iRedMail 1.7.4 + MailPanel (формат бэкапа 2/3)
 #
 # ПРЕДПОСЫЛКИ:
-#   РЕД ОС 8 + голый iRedMail 1.7.4 MARIADB + каталог бэкапа с COMPLETE
+#   РЕД ОС 8 + голый iRedMail 1.7.4 MARIADB + бэкап (каталог или .tgz)
 #
 # Запуск:
+#   sudo bash /opt/mailpanel/scripts/mailpanel-restore.sh /path/to/STAMP.tgz
 #   sudo bash /opt/mailpanel/scripts/mailpanel-restore.sh /path/to/STAMP
-#   MAILPANEL_RESTORE_CONFIRM=YES sudo -E bash ... /path/to/STAMP
-#
-# Автоматически (уроки переноса):
-#   - SQL + /var/vmail + конфиги
-#   - MySQL users из mysql-users.sql И повторно из живых dovecot/postfix/roundcube
-#   - отдельный SQL-user mailpanel_app + правка config.yaml (не зависит от root/TCP)
-#   - +x scripts, SELinux, venv+pip
-#   - правила SpamAssassin из бэкапа (+ sa-update если есть сеть)
-#   - enable --now: php-fpm, amavisd, clamd@amavisd, postfix, dovecot, nginx, ...
+#   MAILPANEL_RESTORE_CONFIRM=YES sudo -E bash ... /path/to/STAMP.tgz
 # =============================================================================
 set -euo pipefail
 
-SRC="${1:-}"
+SRC_ARG="${1:-}"
 CONFIRM="${MAILPANEL_RESTORE_CONFIRM:-}"
+EXTRACT_TMP=""
+
+cleanup_extract() {
+  if [[ -n "${EXTRACT_TMP:-}" && -d "${EXTRACT_TMP:-}" ]]; then
+    rm -rf "$EXTRACT_TMP"
+  fi
+}
+trap cleanup_extract EXIT
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Запускайте от root"
   exit 1
 fi
 
-if [[ -z "$SRC" || ! -d "$SRC" ]]; then
-  echo "Использование: $0 /path/to/backup_dir"
+if [[ -z "$SRC_ARG" ]]; then
+  echo "Использование:"
+  echo "  $0 /path/to/20261102_120000.tgz"
+  echo "  $0 /path/to/20261102_120000"
   exit 1
 fi
-SRC="$(cd "$SRC" && pwd)"
+
+if [[ ! -e "$SRC_ARG" ]]; then
+  echo "ОШИБКА: не найдено: $SRC_ARG"
+  exit 1
+fi
+
+# --- каталог или архив ---
+if [[ -f "$SRC_ARG" ]]; then
+  case "$SRC_ARG" in
+    *.tgz|*.tar.gz|*.tar.bz2|*.tbz2) ;;
+    *)
+      echo "ОШИБКА: ожидается каталог бэкапа или архив .tgz / .tar.gz"
+      exit 1
+      ;;
+  esac
+  SRC_ARG="$(cd "$(dirname "$SRC_ARG")" && pwd)/$(basename "$SRC_ARG")"
+  echo "==> Распаковка архива: $SRC_ARG"
+  EXTRACT_TMP="$(mktemp -d /var/tmp/mailpanel-restore.XXXXXX)"
+  case "$SRC_ARG" in
+    *.tar.bz2|*.tbz2) tar -C "$EXTRACT_TMP" -xjf "$SRC_ARG" ;;
+    *)                tar -C "$EXTRACT_TMP" -xzf "$SRC_ARG" ;;
+  esac
+  # внутри должен быть один каталог STAMP или сразу COMPLETE
+  if [[ -f "$EXTRACT_TMP/COMPLETE" ]]; then
+    SRC="$EXTRACT_TMP"
+  else
+    SRC="$(find "$EXTRACT_TMP" -mindepth 1 -maxdepth 1 -type d | head -1 || true)"
+  fi
+  if [[ -z "${SRC:-}" || ! -d "$SRC" ]]; then
+    echo "ОШИБКА: в архиве нет каталога бэкапа"
+    exit 1
+  fi
+elif [[ -d "$SRC_ARG" ]]; then
+  SRC="$(cd "$SRC_ARG" && pwd)"
+else
+  echo "ОШИБКА: $SRC_ARG — не файл и не каталог"
+  exit 1
+fi
 
 if [[ ! -f "$SRC/COMPLETE" ]]; then
-  echo "ОШИБКА: нет $SRC/COMPLETE"
+  echo "ОШИБКА: нет $SRC/COMPLETE — архив/каталог неполный"
   exit 1
 fi
 
 echo "=============================================="
-echo " Восстановление из: $SRC"
+echo " Восстановление из: $SRC_ARG"
+echo " Рабочий каталог:  $SRC"
 [[ -f "$SRC/meta/info.txt" ]] && cat "$SRC/meta/info.txt"
 echo "=============================================="
 
