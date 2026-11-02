@@ -1,21 +1,16 @@
 #!/bin/bash
 # =============================================================================
-# Бэкап iRedMail 1.7.4 + MailPanel (для переноса на новую ВМ)
+# Бэкап iRedMail 1.7.4 + MailPanel (формат 3 — для «почти zero-touch» restore)
 #
-# Что сохраняет:
-#   - SQL: vmail, amavisd, iredapd, roundcubemail, mailpanel (+ sogo)
-#   - SQL-пользователи приложений (пароли + гранты) → meta/mysql-users.sql
-#   - пароли из config.yaml / типичных cf → meta/app-passwords.env (chmod 600)
-#   - письма: /var/vmail
-#   - конфиги (без venv/node_modules/.git — их restore соберёт заново)
-#   - MailPanel код + /etc/mailpanel + iRedMail.tips
+# Учтено после переноса на ВМ:
+#   - отдельные пароли vmail (dovecot/postfix) и vmailadmin (MailPanel)
+#   - roundcube / iredapd / amavisd SQL-пользователи
+#   - правила SpamAssassin (чтобы amavis не требовал sa-update вручную)
+#   - без venv/node_modules/.git
 #
-# Запуск на ПРОДЕ (root):
+# Запуск (прод, root):
 #   sudo bash /opt/mailpanel/scripts/mailpanel-backup.sh
 #   sudo bash /opt/mailpanel/scripts/mailpanel-backup.sh /mnt/nas/mail-backups
-#
-# Cron:
-#   30 2 * * * root /opt/mailpanel/scripts/mailpanel-backup.sh >>/var/log/mailpanel-backup.log 2>&1
 # =============================================================================
 set -euo pipefail
 
@@ -65,14 +60,12 @@ for db in vmail amavisd iredapd roundcubemail mailpanel sogo; do
   dump_db "$db"
 done
 
-# --- пароли приложений (plaintext) для ALTER USER на новой ВМ ---
 echo "==> meta/app-passwords.env"
 PASS_ENV="${DEST}/meta/app-passwords.env"
 umask 077
 : >"$PASS_ENV"
 
 yaml_get() {
-  # yaml_get FILE SECTION KEY  (простой YAML без сложных вложений)
   local file="$1" section="$2" key="$3"
   [[ -f "$file" ]] || return 0
   awk -v sec="$section" -v key="$key" '
@@ -100,11 +93,13 @@ append_cred() {
 
 CFG="/opt/mailpanel/config.yaml"
 if [[ -f "$CFG" ]]; then
+  # MailPanel БД (часто root или отдельный user)
   append_cred MAILPANEL \
     "$(yaml_get "$CFG" database user)" \
     "$(yaml_get "$CFG" database password)" \
     "$(yaml_get "$CFG" database database)"
-  append_cred VMAIL \
+  # это обычно vmailadmin — НЕ путать с SQL-user vmail для dovecot
+  append_cred VMAILADMIN \
     "$(yaml_get "$CFG" vmail_database user)" \
     "$(yaml_get "$CFG" vmail_database password)" \
     "$(yaml_get "$CFG" vmail_database database)"
@@ -114,17 +109,29 @@ if [[ -f "$CFG" ]]; then
     "$(yaml_get "$CFG" amavisd_database database)"
 fi
 
-# postfix/dovecot mysql maps (часто password=)
+# dovecot: connect = host=... dbname=vmail user=vmail password=...
+if [[ -f /etc/dovecot/dovecot-mysql.conf ]]; then
+  _line="$(grep -E '^connect\s*=' /etc/dovecot/dovecot-mysql.conf 2>/dev/null | head -1 || true)"
+  if [[ -n "$_line" ]]; then
+    _u="$(echo "$_line" | sed -n 's/.*user=\([^ ]*\).*/\1/p')"
+    _p="$(echo "$_line" | sed -n 's/.*password=\([^ ]*\).*/\1/p')"
+    _d="$(echo "$_line" | sed -n 's/.*dbname=\([^ ]*\).*/\1/p')"
+    append_cred DOVECOT_VMAIL "${_u:-vmail}" "$_p" "${_d:-vmail}"
+  fi
+fi
+
+# postfix mysql maps
 extract_cf_pass() {
   local name="$1"
   shift
-  local f user="" pass=""
+  local f user="" pass="" db=""
   for f in "$@"; do
     [[ -f "$f" ]] || continue
     user="$(awk -F= '/^user[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$f" || true)"
-    pass="$(awk -F= '/^password[[:space:]]*=/{sub(/^[^=]*=[[:space:]]*/,""); print; exit}' "$f" || true)"
+    pass="$(awk -F= '/^password[[:space:]]*=/{sub(/^[^=]*=[[:space:]]*/,""); gsub(/[[:space:]]$/,"",$0); print; exit}' "$f" || true)"
+    db="$(awk -F= '/^dbname[[:space:]]*=/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$f" || true)"
     if [[ -n "$user" && -n "$pass" ]]; then
-      append_cred "$name" "$user" "$pass"
+      append_cred "$name" "$user" "$pass" "${db:-vmail}"
       return 0
     fi
   done
@@ -133,22 +140,19 @@ extract_cf_pass() {
 
 extract_cf_pass POSTFIX_VMAIL \
   /etc/postfix/mysql/virtual_mailbox_maps.cf \
-  /etc/postfix/pgsql/virtual_mailbox_maps.cf \
+  /etc/postfix/mysql/virtual_mailbox_domains.cf \
   /etc/postfix/mysql_virtual_mailbox_maps.cf || true
 
-# iredapd settings.py (grep без совпадения + pipefail иначе валит весь скрипт)
 if [[ -f /opt/iredapd/settings.py ]]; then
   iu="$(grep -E "^\s*iredapd_db_user\s*=" /opt/iredapd/settings.py 2>/dev/null | tail -1 | sed -E "s/.*=\s*['\"]([^'\"]+).*/\1/" || true)"
   ipw="$(grep -E "^\s*iredapd_db_password\s*=" /opt/iredapd/settings.py 2>/dev/null | tail -1 | sed -E "s/.*=\s*['\"]([^'\"]+).*/\1/" || true)"
   append_cred IREDAPD "${iu:-iredapd}" "$ipw" "iredapd" || true
 fi
 
-# roundcube
 for rc in /opt/www/roundcubemail/config/config.inc.php \
           /var/www/roundcubemail/config/config.inc.php \
           /usr/share/roundcubemail/config/config.inc.php; do
   if [[ -f "$rc" ]]; then
-    # db_dsnw = 'mysql://user:pass@host/db'
     dsn="$(grep -E "db_dsnw" "$rc" 2>/dev/null | head -1 || true)"
     if [[ "$dsn" =~ mysql://([^:]+):([^@]+)@[^/]+/([a-zA-Z0-9_]+) ]]; then
       append_cred ROUNDCUBE "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" || true
@@ -160,19 +164,16 @@ done
 chmod 600 "$PASS_ENV"
 echo "  записано: $PASS_ENV"
 
-# --- SQL: CREATE/ALTER USER + GRANT (по паролям из env) ---
 echo "==> meta/mysql-users.sql"
 SQL_USERS="${DEST}/meta/mysql-users.sql"
 {
-  echo "-- Generated by mailpanel-backup.sh at $(date -Iseconds)"
-  echo "-- Apply as MySQL root on the NEW host AFTER importing databases."
+  echo "-- Generated by mailpanel-backup.sh format=3 at $(date -Iseconds)"
   echo "SET sql_log_bin = 0;"
 } >"$SQL_USERS"
 
 add_mysql_user_sql() {
   local user="$1" pass="$2" db="$3" priv="${4:-ALL PRIVILEGES}"
-  [[ -n "$user" && -n "$pass" ]] || return 0
-  # экранирование ' в пароле
+  [[ -n "$user" && -n "$pass" && "$user" != "root" ]] || return 0
   local pass_esc="${pass//\'/\'\'}"
   {
     echo "CREATE USER IF NOT EXISTS '${user}'@'localhost' IDENTIFIED BY '${pass_esc}';"
@@ -183,16 +184,27 @@ add_mysql_user_sql() {
   } >>"$SQL_USERS"
 }
 
-# читаем обратно из PASS_ENV
 get_env() { grep -E "^${1}=" "$PASS_ENV" 2>/dev/null | head -1 | cut -d= -f2- || true; }
 
-add_mysql_user_sql "$(get_env VMAIL_USER)" "$(get_env VMAIL_PASSWORD)" "$(get_env VMAIL_DATABASE)" "ALL PRIVILEGES"
-# vmailadmin часто нужен для управления
-if mysql "${mysql_args[@]}" -Nse "SELECT User FROM mysql.user WHERE User='vmailadmin' AND Host='localhost'" 2>/dev/null | grep -qx vmailadmin; then
+# критично: SQL-user vmail для dovecot/postfix (SELECT на vmail)
+_vmail_user="$(get_env DOVECOT_VMAIL_USER)"
+_vmail_pass="$(get_env DOVECOT_VMAIL_PASSWORD)"
+_vmail_db="$(get_env DOVECOT_VMAIL_DATABASE)"
+if [[ -z "$_vmail_pass" ]]; then
+  _vmail_user="$(get_env POSTFIX_VMAIL_USER)"
+  _vmail_pass="$(get_env POSTFIX_VMAIL_PASSWORD)"
+  _vmail_db="$(get_env POSTFIX_VMAIL_DATABASE)"
+fi
+add_mysql_user_sql "${_vmail_user:-vmail}" "$_vmail_pass" "${_vmail_db:-vmail}" "SELECT"
+
+# vmailadmin для MailPanel / админки
+add_mysql_user_sql "$(get_env VMAILADMIN_USER)" "$(get_env VMAILADMIN_PASSWORD)" "$(get_env VMAILADMIN_DATABASE)" "ALL PRIVILEGES"
+# fallback из tips
+if [[ -z "$(get_env VMAILADMIN_PASSWORD)" ]]; then
   va_pass="$(grep -i 'Username:\s*vmailadmin' -A2 /root/iRedMail.tips 2>/dev/null | grep -i password | head -1 | awk '{print $NF}' || true)"
-  [[ -z "$va_pass" ]] && va_pass="$(get_env VMAIL_PASSWORD)"
   add_mysql_user_sql "vmailadmin" "$va_pass" "vmail" "ALL PRIVILEGES"
-fi || true
+fi
+
 add_mysql_user_sql "$(get_env AMAVISD_USER)" "$(get_env AMAVISD_PASSWORD)" "$(get_env AMAVISD_DATABASE)" "ALL PRIVILEGES"
 add_mysql_user_sql "$(get_env IREDAPD_USER)" "$(get_env IREDAPD_PASSWORD)" "$(get_env IREDAPD_DATABASE)" "ALL PRIVILEGES"
 add_mysql_user_sql "$(get_env ROUNDCUBE_USER)" "$(get_env ROUNDCUBE_PASSWORD)" "$(get_env ROUNDCUBE_DATABASE)" "ALL PRIVILEGES"
@@ -200,21 +212,27 @@ add_mysql_user_sql "$(get_env ROUNDCUBE_USER)" "$(get_env ROUNDCUBE_PASSWORD)" "
 mp_user="$(get_env MAILPANEL_USER)"
 mp_pass="$(get_env MAILPANEL_PASSWORD)"
 mp_db="$(get_env MAILPANEL_DATABASE)"
-if [[ -n "$mp_user" && -n "$mp_pass" ]]; then
-  if [[ "$mp_user" == "root" ]]; then
-    # root на новой ВМ лучше не перетирать здесь — только app-пользователь
-    echo "  mailpanel database.user=root — пароль root не меняем SQL-файлом (останется root новой ВМ;"
-    echo "  в config.yaml после restore при необходимости поправьте database.password под root новой ВМ)"
-    echo "-- mailpanel uses MySQL root; sync database.password in config.yaml to NEW host root" >>"$SQL_USERS"
-  else
-    add_mysql_user_sql "$mp_user" "$mp_pass" "${mp_db:-mailpanel}" "ALL PRIVILEGES"
-  fi
+if [[ -n "$mp_user" && "$mp_user" != "root" && -n "$mp_pass" ]]; then
+  add_mysql_user_sql "$mp_user" "$mp_pass" "${mp_db:-mailpanel}" "ALL PRIVILEGES"
+else
+  # для restore: всегда будет создан выделенный user mailpanel_app
+  echo "-- panel used root; restore will create mailpanel_app and rewrite config.yaml" >>"$SQL_USERS"
 fi
 
 echo "FLUSH PRIVILEGES;" >>"$SQL_USERS"
 chmod 600 "$SQL_USERS"
 
-# права на скрипты до упаковки
+# SpamAssassin rules (чтобы amavis не падал без sa-update)
+echo "==> meta/sa-rules.tar.gz"
+if [[ -d /var/lib/spamassassin ]] || [[ -d /usr/share/spamassassin ]]; then
+  tar -C / -czf "${DEST}/meta/sa-rules.tar.gz" \
+    --ignore-failed-read \
+    var/lib/spamassassin usr/share/spamassassin 2>/dev/null || true
+  ls -lh "${DEST}/meta/sa-rules.tar.gz" 2>/dev/null || echo "  sa-rules не собраны"
+else
+  echo "  каталоги SA не найдены"
+fi
+
 if [[ -d /opt/mailpanel/scripts ]]; then
   chmod +x /opt/mailpanel/scripts/*.sh 2>/dev/null || true
 fi
@@ -255,7 +273,7 @@ if [[ ${#TAR_LIST[@]} -gt 0 ]]; then
     "${TAR_LIST[@]}"
 fi
 
-echo "==> Почта /var/vmail (самый долгий шаг)"
+echo "==> Почта /var/vmail"
 if [[ -d /var/vmail ]]; then
   tar -C / -czf "${DEST}/vmail/vmail.tar.gz" \
     --exclude='var/vmail/*/Maildir/dovecot.index*' \
@@ -272,8 +290,8 @@ echo "==> Метаданные"
   echo "iredmail_release=$(cat /etc/iredmail-release 2>/dev/null || echo unknown)"
   echo "hostname=$(hostname -f 2>/dev/null || hostname)"
   ip -4 -o addr show scope global 2>/dev/null | awk '{print "ip="$4}' | cut -d/ -f1
-  echo "mailpanel=$( [[ -d /opt/mailpanel ]] && echo yes || echo no )"
-  echo "backup_format=2"
+  echo "mailpanel=yes"
+  echo "backup_format=3"
 } >"${DEST}/meta/info.txt"
 
 cp -a /etc/iredmail-release "${DEST}/meta/" 2>/dev/null || true
@@ -281,20 +299,9 @@ uname -a >"${DEST}/meta/uname.txt" 2>/dev/null || true
 [[ -f "$CFG" ]] && cp -a "$CFG" "${DEST}/meta/config.yaml.sample" 2>/dev/null || true
 
 cat >"${DEST}/meta/RESTORE.txt" <<'EOF'
-Восстановление на новой ВМ:
-  1) РЕД ОС 8 + iRedMail 1.7.4 MARIADB (голый)
-  2) Скопировать каталог бэкапа (НЕ через git)
-  3) Достать скрипт: git clone mailpanel → scripts/mailpanel-restore.sh
-     ИЛИ после распаковки configs он появится в /opt/mailpanel/scripts/
-  4) sudo bash /opt/mailpanel/scripts/mailpanel-restore.sh /path/to/STAMP
-  5) Ввести YES
-
-Скрипт сам:
-  - накатит SQL и /var/vmail
-  - выровняет MySQL-пользователей под пароли из бэкапа
-  - выставит +x на scripts, SELinux restorecon
-  - создаст venv и поставит Python-зависимости
-  - поднимет службы
+На новой ВМ: РЕД ОС 8 + iRedMail 1.7.4 MARIADB, затем:
+  sudo bash /opt/mailpanel/scripts/mailpanel-restore.sh /path/to/STAMP
+Ввести YES. Скрипт сам поднимет MySQL-users, venv, php-fpm, amavis, clamav, SA rules.
 EOF
 
 ( cd "$DEST" && find . -type f ! -name 'SHA256SUMS' -print0 | sort -z | xargs -0 sha256sum ) \
@@ -302,12 +309,11 @@ EOF
 
 touch "${DEST}/COMPLETE"
 
-echo "==> Ротация: старше ${KEEP_DAYS} дн. в ${BACKUP_ROOT}"
+echo "==> Ротация: старше ${KEEP_DAYS} дн."
 find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name "$STAMP" -mtime "+${KEEP_DAYS}" \
   -exec rm -rf {} + 2>/dev/null || true
 
 SIZE="$(du -sh "$DEST" | awk '{print $1}')"
 echo ""
 echo "Готово: $DEST  ($SIZE)"
-echo "Восстановление:"
 echo "  sudo bash /opt/mailpanel/scripts/mailpanel-restore.sh $DEST"
