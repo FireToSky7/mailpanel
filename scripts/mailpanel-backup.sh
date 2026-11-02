@@ -313,8 +313,23 @@ touch "${DEST}/COMPLETE"
 
 echo "==> Архив .tgz (для переноса на флешку / scp)"
 ARCHIVE="${BACKUP_ROOT}/${STAMP}.tgz"
-tar -C "$BACKUP_ROOT" -czf "$ARCHIVE" "$STAMP"
-chmod 600 "$ARCHIVE" 2>/dev/null || true
+# пишем во временный файл, потом mv — меньше проблем с правами/обрывами
+TMP_ARCHIVE="${BACKUP_ROOT}/.${STAMP}.tgz.partial"
+rm -f "$TMP_ARCHIVE" "$ARCHIVE"
+tar -C "$BACKUP_ROOT" -czf "$TMP_ARCHIVE" "$STAMP"
+mv -f "$TMP_ARCHIVE" "$ARCHIVE"
+# читаемо для копирования (не только root); секреты всё равно на диске бэкапов
+chmod 644 "$ARCHIVE" 2>/dev/null || true
+# удобная копия в домашний каталог того, кто вызвал sudo
+if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+  HOME_DIR="$(getent passwd "$SUDO_USER" | cut -d: -f6 || true)"
+  if [[ -n "$HOME_DIR" && -d "$HOME_DIR" ]]; then
+    cp -f "$ARCHIVE" "${HOME_DIR}/${STAMP}.tgz"
+    chown "${SUDO_USER}:${SUDO_USER}" "${HOME_DIR}/${STAMP}.tgz" 2>/dev/null || true
+    chmod 644 "${HOME_DIR}/${STAMP}.tgz" 2>/dev/null || true
+    echo "  копия для переноса: ${HOME_DIR}/${STAMP}.tgz"
+  fi
+fi
 # по умолчанию каталог оставляем; удалить: MAILPANEL_BACKUP_REMOVE_DIR=1
 if [[ "${MAILPANEL_BACKUP_REMOVE_DIR:-0}" == "1" ]]; then
   echo "  удаляем распакованный каталог (остаётся только .tgz)"
