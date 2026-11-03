@@ -306,11 +306,20 @@ if command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" == "Enfor
 fi
 
 echo "==> SpamAssassin rules"
+SA_FROM_BACKUP=0
 if [[ -f "$SRC/meta/sa-rules.tar.gz" ]]; then
-  tar -C / -xzf "$SRC/meta/sa-rules.tar.gz" 2>/dev/null && echo "  из бэкапа" || true
+  tar -C / -xzf "$SRC/meta/sa-rules.tar.gz" 2>/dev/null && SA_FROM_BACKUP=1 && echo "  из бэкапа" || true
 fi
-if command -v sa-update &>/dev/null; then
-  sa-update 2>/dev/null && echo "  sa-update OK" || echo "  sa-update пропущен (нет сети/GPG) — ок, если rules из бэкапа"
+# sa-update часто виснет без интернета — не блокируем restore
+if [[ "${MAILPANEL_RESTORE_SA_UPDATE:-0}" == "1" ]] && command -v sa-update &>/dev/null; then
+  echo "  sa-update (таймаут 90с)..."
+  if command -v timeout &>/dev/null; then
+    timeout 90 sa-update 2>/dev/null && echo "  sa-update OK" || echo "  sa-update пропущен/таймаут"
+  else
+    sa-update 2>/dev/null && echo "  sa-update OK" || echo "  sa-update пропущен"
+  fi
+elif [[ "$SA_FROM_BACKUP" == "1" ]]; then
+  echo "  sa-update не запускаем (правила уже из бэкапа; включить: MAILPANEL_RESTORE_SA_UPDATE=1)"
 fi
 
 echo "==> Python venv"
