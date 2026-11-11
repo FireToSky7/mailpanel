@@ -10,15 +10,17 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.routers import api_router, auth_router
+from app.services import backup_ops
 from app.services.log_collector import LogCollector, ensure_bootstrap_admin
 
 FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 _collector_thread: threading.Thread | None = None
+_backup_thread: threading.Thread | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _collector_thread
+    global _collector_thread, _backup_thread
     try:
         ensure_bootstrap_admin()
     except Exception:
@@ -31,6 +33,12 @@ async def lifespan(app: FastAPI):
 
     _collector_thread = threading.Thread(target=_run, daemon=True, name="log-collector")
     _collector_thread.start()
+
+    def _backup_run():
+        backup_ops.run_loop()
+
+    _backup_thread = threading.Thread(target=_backup_run, daemon=True, name="backup-scheduler")
+    _backup_thread.start()
     yield
 
 

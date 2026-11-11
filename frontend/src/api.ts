@@ -187,6 +187,33 @@ export type LogCollectorSettings = {
   ok?: boolean
 }
 
+export type BackupStatus = {
+  running: boolean
+  last_started?: string | null
+  last_finished?: string | null
+  last_ok?: boolean | null
+  last_error?: string | null
+  last_archive?: string | null
+}
+
+export type BackupSettings = {
+  enabled: boolean
+  directory: string
+  interval_hours: number
+  retention_days: number
+  timeout_seconds: number
+  status?: BackupStatus
+  note?: string
+  ok?: boolean
+}
+
+export type BackupItem = {
+  name: string
+  path: string
+  size_bytes: number
+  mtime: string
+}
+
 export type DashboardData = {
   stats: {
     domain: string
@@ -635,6 +662,15 @@ export const api = {
   },
   services: () => request<ServiceStatus[]>('/api/services'),
   restartService: (name: string) => request<ServiceStatus>(`/api/services/${name}/restart`, { method: 'POST' }),
+  backupSettings: () => request<BackupSettings>('/api/backup/settings'),
+  updateBackupSettings: (body: Partial<BackupSettings>) =>
+    request<BackupSettings>('/api/backup/settings', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  backupList: () =>
+    request<{ directory: string; items: BackupItem[]; status: BackupStatus }>('/api/backup/list'),
+  runBackup: () => request<{ ok: boolean; started?: boolean; status?: BackupStatus }>('/api/backup/run', { method: 'POST' }),
   fail2ban: () => request<Fail2banData>('/api/fail2ban'),
   fail2banSettings: () => request<Fail2banSettings>('/api/fail2ban/settings'),
   updateFail2banSettings: (body: {
@@ -671,6 +707,7 @@ export function canAccess(role: string, section: string): boolean {
     queue: ['superadmin', 'admin'],
     logs: ['superadmin', 'admin', 'viewer'],
     services: ['superadmin', 'admin', 'viewer'],
+    backup: ['superadmin', 'admin', 'viewer'],
     panelUsers: ['superadmin'],
   }
   return (map[section] || []).includes(role)

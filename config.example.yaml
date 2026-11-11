@@ -68,3 +68,10 @@ log_collector:
   archive_enabled: true
   archive_interval_hours: 1
   archive_retention_days: 14
+
+backup:
+  enabled: false
+  directory: /var/backups/mailpanel
+  interval_hours: 24
+  retention_days: 14
+  timeout_seconds: 7200

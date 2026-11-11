@@ -6,10 +6,25 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 from app.auth import PanelUser, Role, client_ip, get_current_user, require_permission, write_audit
-from app.config import get_config, role_has_permission, update_log_collector_settings
+from app.config import (
+    get_config,
+    role_has_permission,
+    update_backup_settings,
+    update_log_collector_settings,
+)
 from fastapi.responses import FileResponse
 
-from app.services import amavis_policy, content_filter_ops, fail2ban_ops, group_ops, iredapd, log_archive, log_reader, mail_ops
+from app.services import (
+    amavis_policy,
+    backup_ops,
+    content_filter_ops,
+    fail2ban_ops,
+    group_ops,
+    iredapd,
+    log_archive,
+    log_reader,
+    mail_ops,
+)
 from app.services.amavis_policy import AmavisPolicyError
 from app.services.content_filter_ops import ContentFilterError
 from app.services.fail2ban_ops import Fail2banError
@@ -1207,6 +1222,92 @@ def put_logs_settings(
         }
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+class BackupSettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    directory: str | None = Field(default=None, min_length=1, max_length=400)
+    interval_hours: float | None = Field(default=None, ge=6, le=336)
+    retention_days: int | None = Field(default=None, ge=1, le=3650)
+    timeout_seconds: int | None = Field(default=None, ge=600, le=86400)
+
+
+@router.get("/backup/settings", dependencies=[Depends(require_permission("services.read"))])
+def get_backup_settings():
+    b = get_config().backup
+    return {
+        "enabled": b.enabled,
+        "directory": b.directory,
+        "interval_hours": b.interval_hours,
+        "retention_days": b.retention_days,
+        "timeout_seconds": b.timeout_seconds,
+        "status": backup_ops.get_runtime_status(),
+    }
+
+
+@router.put("/backup/settings", dependencies=[Depends(require_permission("services.restart"))])
+def put_backup_settings(
+    payload: BackupSettingsUpdate,
+    request: Request,
+    user: PanelUser = Depends(require_permission("services.restart")),
+):
+    try:
+        updated = update_backup_settings(
+            enabled=payload.enabled,
+            directory=payload.directory,
+            interval_hours=payload.interval_hours,
+            retention_days=payload.retention_days,
+            timeout_seconds=payload.timeout_seconds,
+        )
+        _audit(
+            user,
+            request,
+            "update",
+            "backup_settings",
+            (
+                f"enabled={updated.enabled};dir={updated.directory};"
+                f"interval_h={updated.interval_hours};keep={updated.retention_days}"
+            ),
+        )
+        return {
+            "ok": True,
+            "enabled": updated.enabled,
+            "directory": updated.directory,
+            "interval_hours": updated.interval_hours,
+            "retention_days": updated.retention_days,
+            "timeout_seconds": updated.timeout_seconds,
+            "status": backup_ops.get_runtime_status(),
+            "note": "Настройки сохранены в config.yaml; планировщик читает их без перезапуска.",
+        }
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.get("/backup/list", dependencies=[Depends(require_permission("services.read"))])
+def get_backup_list():
+    b = get_config().backup
+    try:
+        items = backup_ops.list_backups(b.directory)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"directory": b.directory, "items": items, "status": backup_ops.get_runtime_status()}
+
+
+@router.post("/backup/run", dependencies=[Depends(require_permission("services.restart"))])
+def post_backup_run(
+    request: Request,
+    user: PanelUser = Depends(require_permission("services.restart")),
+):
+    try:
+        res = backup_ops.start_backup_async(trigger="manual")
+        _audit(user, request, "run", "backup", res.get("trigger", "manual"))
+        return res
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 

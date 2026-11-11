@@ -95,6 +95,14 @@ class LogCollectorConfig(BaseModel):
     archive_retention_days: int = 14
 
 
+class BackupConfig(BaseModel):
+    enabled: bool = False
+    directory: str = "/var/backups/mailpanel"
+    interval_hours: float = 24.0
+    retention_days: int = 14
+    timeout_seconds: int = 7200
+
+
 class AmavisdConfig(BaseModel):
     release_host: str = "127.0.0.1"
     release_port: int = 9998
@@ -109,6 +117,7 @@ class AppConfig(BaseModel):
     paths: PathsConfig
     services: list[str] = Field(default_factory=list)
     log_collector: LogCollectorConfig = Field(default_factory=LogCollectorConfig)
+    backup: BackupConfig = Field(default_factory=BackupConfig)
 
 
 def _find_config_path() -> Path:
@@ -172,6 +181,56 @@ def update_log_collector_settings(
 
     validated = LogCollectorConfig.model_validate(current)
     raw["log_collector"] = validated.model_dump()
+    with path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(
+            raw,
+            handle,
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=False,
+        )
+    reload_config()
+    return validated
+
+
+def update_backup_settings(
+    *,
+    enabled: bool | None = None,
+    directory: str | None = None,
+    interval_hours: float | None = None,
+    retention_days: int | None = None,
+    timeout_seconds: int | None = None,
+) -> BackupConfig:
+    """Обновляет секцию backup в config.yaml и сбрасывает кэш."""
+    from app.services.backup_ops import ensure_backup_directory, validate_backup_directory
+
+    path = _find_config_path()
+    with path.open("r", encoding="utf-8") as handle:
+        raw: dict[str, Any] = yaml.safe_load(handle) or {}
+
+    current = dict(raw.get("backup") or {})
+    if enabled is not None:
+        current["enabled"] = bool(enabled)
+    if directory is not None:
+        resolved = ensure_backup_directory(validate_backup_directory(directory))
+        current["directory"] = str(resolved)
+    if interval_hours is not None:
+        if interval_hours < 6 or interval_hours > 168 * 2:
+            raise ValueError("interval_hours: от 6 до 336 (2 недели)")
+        current["interval_hours"] = float(interval_hours)
+    if retention_days is not None:
+        if retention_days < 1 or retention_days > 3650:
+            raise ValueError("retention_days: от 1 до 3650")
+        current["retention_days"] = int(retention_days)
+    if timeout_seconds is not None:
+        if timeout_seconds < 600 or timeout_seconds > 86400:
+            raise ValueError("timeout_seconds: от 600 до 86400")
+        current["timeout_seconds"] = int(timeout_seconds)
+
+    validated = BackupConfig.model_validate(current)
+    # убедиться, что каталог существует и доступен
+    ensure_backup_directory(validate_backup_directory(validated.directory))
+    raw["backup"] = validated.model_dump()
     with path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(
             raw,

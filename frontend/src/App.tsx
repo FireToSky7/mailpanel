@@ -15,6 +15,7 @@ import QuarantinePage from './pages/QuarantinePage'
 import QueuePage from './pages/QueuePage'
 import LogsPage from './pages/LogsPage'
 import Fail2banPage from './pages/Fail2banPage'
+import BackupPage from './pages/BackupPage'
 import PanelUsersPage from './pages/PanelUsersPage'
 
 function Shell({ children }: { children: React.ReactNode }) {
@@ -33,6 +34,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     { to: '/quarantine', label: 'Карантин', section: 'quarantine' },
     { to: '/queue', label: 'Очередь', section: 'queue' },
     { to: '/logs', label: 'Логи', section: 'logs' },
+    { to: '/backup', label: 'Бэкапы', section: 'backup' },
     { to: '/fail2ban', label: 'Fail2ban', section: 'services' },
     { to: '/panel-users', label: 'Админы панели', section: 'panelUsers' },
   ].filter((l) => canAccess(user.role, l.section))
@@ -77,6 +79,7 @@ export default function App() {
         <Route path="/quarantine" element={<PrivateRoute><QuarantinePage /></PrivateRoute>} />
         <Route path="/queue" element={<PrivateRoute><QueuePage /></PrivateRoute>} />
         <Route path="/logs" element={<PrivateRoute><LogsPage /></PrivateRoute>} />
+        <Route path="/backup" element={<PrivateRoute><BackupPage /></PrivateRoute>} />
         <Route path="/fail2ban" element={<PrivateRoute><Fail2banPage /></PrivateRoute>} />
         <Route path="/services" element={<Navigate to="/fail2ban" replace />} />
         <Route path="/panel-users" element={<PrivateRoute><PanelUsersPage /></PrivateRoute>} />
