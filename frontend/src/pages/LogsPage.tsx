@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type LogArchive } from '../api'
+import { api, type LogArchive, type LogCollectorSettings } from '../api'
 import { errorMessage } from '../errors'
 import { notify } from '../notify'
 
@@ -29,6 +29,15 @@ function formatBytes(n?: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
+const emptySettings: LogCollectorSettings = {
+  enabled: true,
+  poll_interval_seconds: 5,
+  retention_days: 90,
+  archive_enabled: true,
+  archive_interval_hours: 1,
+  archive_retention_days: 14,
+}
+
 export default function LogsPage() {
   const [since, setSince] = useState(() => hoursAgo(24))
   const [until, setUntil] = useState('')
@@ -40,6 +49,8 @@ export default function LogsPage() {
   const [liveType, setLiveType] = useState<string | null>(null)
   const [liveAuto, setLiveAuto] = useState(false)
   const [audit, setAudit] = useState<any[]>([])
+  const [settings, setSettings] = useState<LogCollectorSettings>(emptySettings)
+  const [settingsSaving, setSettingsSaving] = useState(false)
   const logBoxRef = useRef<HTMLPreElement>(null)
 
   async function loadArchives() {
@@ -48,10 +59,37 @@ export default function LogsPage() {
     if (res.server?.path) setServerPath(res.server.path)
   }
 
+  async function loadSettings() {
+    const res = await api.logsSettings()
+    setSettings(res)
+    if (res.archives_path) setServerPath(res.archives_path)
+  }
+
   useEffect(() => {
     api.audit().then(setAudit).catch((e) => notify.error(errorMessage(e)))
     loadArchives().catch((e) => notify.error(errorMessage(e)))
+    loadSettings().catch((e) => notify.error(errorMessage(e)))
   }, [])
+
+  async function saveSettings() {
+    setSettingsSaving(true)
+    try {
+      const res = await api.updateLogsSettings({
+        enabled: settings.enabled,
+        poll_interval_seconds: Number(settings.poll_interval_seconds),
+        retention_days: Number(settings.retention_days),
+        archive_enabled: settings.archive_enabled,
+        archive_interval_hours: Number(settings.archive_interval_hours),
+        archive_retention_days: Number(settings.archive_retention_days),
+      })
+      setSettings((prev) => ({ ...prev, ...res }))
+      notify.success(res.note || 'Настройки автологирования сохранены')
+    } catch (e) {
+      notify.error(errorMessage(e))
+    } finally {
+      setSettingsSaving(false)
+    }
+  }
 
   useEffect(() => {
     if (!liveAuto || !liveType) return undefined
@@ -106,6 +144,83 @@ export default function LogsPage() {
   return (
     <div>
       <div className="topbar"><h2>Логи</h2></div>
+
+      <div className="card">
+        <h3>Автологирование</h3>
+        <p className="muted">
+          Сборщик читает maillog / dovecot / iredapd в БД панели и делает ZIP-снимки в{' '}
+          <code>{serverPath}</code>. Изменения пишутся в <code>config.yaml</code> и применяются
+          без перезапуска службы.
+        </p>
+        <div className="form-row" style={{ flexWrap: 'wrap', gap: 12 }}>
+          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={settings.enabled}
+              onChange={(e) => setSettings((s) => ({ ...s, enabled: e.target.checked }))}
+            />
+            Сбор в БД включён
+          </label>
+          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            Интервал опроса (сек)
+            <input
+              type="number"
+              min={1}
+              max={3600}
+              style={{ width: 88 }}
+              value={settings.poll_interval_seconds}
+              onChange={(e) => setSettings((s) => ({ ...s, poll_interval_seconds: Number(e.target.value) }))}
+            />
+          </label>
+          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            Хранить записи БД (дней)
+            <input
+              type="number"
+              min={1}
+              max={3650}
+              style={{ width: 88 }}
+              value={settings.retention_days}
+              onChange={(e) => setSettings((s) => ({ ...s, retention_days: Number(e.target.value) }))}
+            />
+          </label>
+        </div>
+        <div className="form-row" style={{ flexWrap: 'wrap', gap: 12, marginTop: 8 }}>
+          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={settings.archive_enabled}
+              onChange={(e) => setSettings((s) => ({ ...s, archive_enabled: e.target.checked }))}
+            />
+            Автоснимки ZIP
+          </label>
+          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            Интервал снимков (часов)
+            <input
+              type="number"
+              min={0.25}
+              max={168}
+              step={0.25}
+              style={{ width: 88 }}
+              value={settings.archive_interval_hours}
+              onChange={(e) => setSettings((s) => ({ ...s, archive_interval_hours: Number(e.target.value) }))}
+            />
+          </label>
+          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            Хранить ZIP (дней)
+            <input
+              type="number"
+              min={1}
+              max={3650}
+              style={{ width: 88 }}
+              value={settings.archive_retention_days}
+              onChange={(e) => setSettings((s) => ({ ...s, archive_retention_days: Number(e.target.value) }))}
+            />
+          </label>
+          <button type="button" onClick={saveSettings} disabled={settingsSaving}>
+            {settingsSaving ? 'Сохранение…' : 'Сохранить'}
+          </button>
+        </div>
+      </div>
 
       <div className="card">
         <h3>Выгрузка логов</h3>

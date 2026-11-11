@@ -9,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import get_config
 from app.routers import api_router, auth_router
 from app.services.log_collector import LogCollector, ensure_bootstrap_admin
 
@@ -24,15 +23,14 @@ async def lifespan(app: FastAPI):
         ensure_bootstrap_admin()
     except Exception:
         pass
-    cfg = get_config()
-    if cfg.log_collector.enabled:
-        collector = LogCollector()
+    # Поток всегда стартует; включение/выключение — через log_collector.enabled в config
+    collector = LogCollector()
 
-        def _run():
-            collector.run_loop()
+    def _run():
+        collector.run_loop()
 
-        _collector_thread = threading.Thread(target=_run, daemon=True, name="log-collector")
-        _collector_thread.start()
+    _collector_thread = threading.Thread(target=_run, daemon=True, name="log-collector")
+    _collector_thread.start()
     yield
 
 

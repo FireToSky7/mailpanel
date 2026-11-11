@@ -127,3 +127,58 @@ def get_config() -> AppConfig:
     with _find_config_path().open("r", encoding="utf-8") as handle:
         raw: dict[str, Any] = yaml.safe_load(handle) or {}
     return AppConfig.model_validate(raw)
+
+
+def reload_config() -> AppConfig:
+    get_config.cache_clear()
+    return get_config()
+
+
+def update_log_collector_settings(
+    *,
+    enabled: bool | None = None,
+    poll_interval_seconds: int | None = None,
+    retention_days: int | None = None,
+    archive_enabled: bool | None = None,
+    archive_interval_hours: float | None = None,
+    archive_retention_days: int | None = None,
+) -> LogCollectorConfig:
+    """Обновляет секцию log_collector в config.yaml и сбрасывает кэш."""
+    path = _find_config_path()
+    with path.open("r", encoding="utf-8") as handle:
+        raw: dict[str, Any] = yaml.safe_load(handle) or {}
+
+    current = dict(raw.get("log_collector") or {})
+    if enabled is not None:
+        current["enabled"] = bool(enabled)
+    if poll_interval_seconds is not None:
+        if poll_interval_seconds < 1 or poll_interval_seconds > 3600:
+            raise ValueError("poll_interval_seconds: от 1 до 3600")
+        current["poll_interval_seconds"] = int(poll_interval_seconds)
+    if retention_days is not None:
+        if retention_days < 1 or retention_days > 3650:
+            raise ValueError("retention_days: от 1 до 3650")
+        current["retention_days"] = int(retention_days)
+    if archive_enabled is not None:
+        current["archive_enabled"] = bool(archive_enabled)
+    if archive_interval_hours is not None:
+        if archive_interval_hours < 0.25 or archive_interval_hours > 168:
+            raise ValueError("archive_interval_hours: от 0.25 до 168")
+        current["archive_interval_hours"] = float(archive_interval_hours)
+    if archive_retention_days is not None:
+        if archive_retention_days < 1 or archive_retention_days > 3650:
+            raise ValueError("archive_retention_days: от 1 до 3650")
+        current["archive_retention_days"] = int(archive_retention_days)
+
+    validated = LogCollectorConfig.model_validate(current)
+    raw["log_collector"] = validated.model_dump()
+    with path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(
+            raw,
+            handle,
+            allow_unicode=True,
+            default_flow_style=False,
+            sort_keys=False,
+        )
+    reload_config()
+    return validated

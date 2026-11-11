@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 from app.auth import PanelUser, Role, client_ip, get_current_user, require_permission, write_audit
-from app.config import get_config, role_has_permission
+from app.config import get_config, role_has_permission, update_log_collector_settings
 from fastapi.responses import FileResponse
 
 from app.services import amavis_policy, content_filter_ops, fail2ban_ops, group_ops, iredapd, log_archive, log_reader, mail_ops
@@ -1140,6 +1140,75 @@ class LogExportRequest(BaseModel):
     since: str | None = None
     until: str | None = None
     label: str = "manual"
+
+
+class LogCollectorSettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    poll_interval_seconds: int | None = Field(default=None, ge=1, le=3600)
+    retention_days: int | None = Field(default=None, ge=1, le=3650)
+    archive_enabled: bool | None = None
+    archive_interval_hours: float | None = Field(default=None, ge=0.25, le=168)
+    archive_retention_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+@router.get("/logs/settings", dependencies=[Depends(require_permission("logs.read"))])
+def get_logs_settings():
+    from pathlib import Path
+
+    cfg = get_config()
+    lc = cfg.log_collector
+    log_dir = getattr(cfg.paths, "mailpanel_log_dir", None) or "/var/log/mailpanel"
+    return {
+        "enabled": lc.enabled,
+        "poll_interval_seconds": lc.poll_interval_seconds,
+        "retention_days": lc.retention_days,
+        "archive_enabled": lc.archive_enabled,
+        "archive_interval_hours": lc.archive_interval_hours,
+        "archive_retention_days": lc.archive_retention_days,
+        "archives_path": str(Path(log_dir) / "archives"),
+    }
+
+
+@router.put("/logs/settings", dependencies=[Depends(require_permission("services.restart"))])
+def put_logs_settings(
+    payload: LogCollectorSettingsUpdate,
+    request: Request,
+    user: PanelUser = Depends(require_permission("services.restart")),
+):
+    try:
+        updated = update_log_collector_settings(
+            enabled=payload.enabled,
+            poll_interval_seconds=payload.poll_interval_seconds,
+            retention_days=payload.retention_days,
+            archive_enabled=payload.archive_enabled,
+            archive_interval_hours=payload.archive_interval_hours,
+            archive_retention_days=payload.archive_retention_days,
+        )
+        _audit(
+            user,
+            request,
+            "update",
+            "log_collector_settings",
+            (
+                f"enabled={updated.enabled};poll={updated.poll_interval_seconds};"
+                f"retention={updated.retention_days};archive={updated.archive_enabled};"
+                f"archive_h={updated.archive_interval_hours};archive_keep={updated.archive_retention_days}"
+            ),
+        )
+        return {
+            "ok": True,
+            "enabled": updated.enabled,
+            "poll_interval_seconds": updated.poll_interval_seconds,
+            "retention_days": updated.retention_days,
+            "archive_enabled": updated.archive_enabled,
+            "archive_interval_hours": updated.archive_interval_hours,
+            "archive_retention_days": updated.archive_retention_days,
+            "note": "Настройки применены без перезапуска службы (сборщик читает config на каждом цикле).",
+        }
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/logs/live/{log_type}", dependencies=[Depends(require_permission("logs.read"))])

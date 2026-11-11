@@ -133,18 +133,32 @@ class LogCollector:
     def run_loop(self) -> None:
         from app.services import log_archive
 
-        cfg = get_config()
         last_archive: datetime | None = None
+        last_cleanup = 0.0
         while True:
-            try:
-                self.run_once()
-            except Exception:
-                pass
-            try:
-                last_archive, _ = log_archive.maybe_auto_archive(last_archive)
-            except Exception:
-                pass
-            time.sleep(cfg.log_collector.poll_interval_seconds)
+            cfg = get_config()
+            lc = cfg.log_collector
+            if lc.enabled:
+                try:
+                    self.run_once()
+                except Exception:
+                    pass
+                try:
+                    last_archive, _ = log_archive.maybe_auto_archive(last_archive)
+                except Exception:
+                    pass
+                # чистка БД не чаще раза в час
+                now = time.time()
+                if now - last_cleanup >= 3600:
+                    try:
+                        self.cleanup_old()
+                    except Exception:
+                        pass
+                    last_cleanup = now
+                sleep_s = max(1, int(lc.poll_interval_seconds))
+            else:
+                sleep_s = 30
+            time.sleep(sleep_s)
 
 
 def ensure_bootstrap_admin() -> None:

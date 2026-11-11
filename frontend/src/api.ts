@@ -175,6 +175,18 @@ export type LogArchivesList = {
   server: { path: string; count: number }
 }
 
+export type LogCollectorSettings = {
+  enabled: boolean
+  poll_interval_seconds: number
+  retention_days: number
+  archive_enabled: boolean
+  archive_interval_hours: number
+  archive_retention_days: number
+  archives_path?: string
+  note?: string
+  ok?: boolean
+}
+
 export type DashboardData = {
   stats: {
     domain: string
@@ -586,6 +598,12 @@ export const api = {
       `/api/logs/live/${type}?lines=${lines}`,
     ),
   logsArchives: () => request<LogArchivesList>('/api/logs/archives'),
+  logsSettings: () => request<LogCollectorSettings>('/api/logs/settings'),
+  updateLogsSettings: (body: Partial<LogCollectorSettings>) =>
+    request<LogCollectorSettings>('/api/logs/settings', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
   createLogsArchive: (body: { since?: string; until?: string; label?: string }) =>
     request<{ ok: boolean } & LogArchive>('/api/logs/archives', {
       method: 'POST',
